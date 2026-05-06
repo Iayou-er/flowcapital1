@@ -1,0 +1,22 @@
+/* App.css — 墨夜鎏金 布局辅助 */
+
+.news-content {
+  line-height: 1.9;
+  color: var(--frost);
+  margin-bottom: 20px;
+  padding: 0 20px 20px 20px;
+  font-size: 15px;
+  white-space: pre-line;
+}
+
+.news-tags {
+  margin-top: 20px;
+  padding: 0 20px 20px 20px;
+}
+
+.back-button {
+  margin-bottom: 16px;
+  height: 38px !important;
+  padding: 0 16px !important;
+  border-radius: var(--radius-sm) !important;
+}

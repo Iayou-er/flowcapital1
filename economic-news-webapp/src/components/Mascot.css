@@ -1,0 +1,74 @@
+/* ========================================
+   Mascot.css — 装饰样式
+   ======================================== */
+
+.mascot {
+  display: inline-block;
+  vertical-align: middle;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  cursor: default;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.08));
+}
+
+.mascot:hover {
+  transform: scale(1.05) translateY(-4px);
+  filter: drop-shadow(0 8px 16px rgba(196, 163, 90, 0.15));
+}
+
+/* 角色摇摆动画 */
+@keyframes mascot-sway {
+  0%, 100% { transform: rotate(-1.5deg); }
+  50% { transform: rotate(1.5deg); }
+}
+
+.mascot-sway {
+  animation: mascot-sway 3.5s ease-in-out infinite;
+  transform-origin: bottom center;
+}
+
+/* 角色弹跳动画 */
+@keyframes mascot-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+.mascot-bounce {
+  animation: mascot-bounce 2.5s ease-in-out infinite;
+}
+
+/* 对话气泡 */
+.mascot-speech {
+  position: relative;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1.5px solid var(--card-border);
+  border-radius: 12px;
+  padding: 10px 16px;
+  font-size: 13px;
+  color: var(--dim);
+  max-width: 200px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.mascot-speech::after {
+  content: '';
+  position: absolute;
+  bottom: -8px;
+  left: 24px;
+  width: 0;
+  height: 0;
+  border-left: 8px solid transparent;
+  border-right: 8px solid transparent;
+  border-top: 8px solid rgba(255, 255, 255, 0.05);
+}
+
+.mascot-speech::before {
+  content: '';
+  position: absolute;
+  bottom: -10px;
+  left: 22px;
+  width: 0;
+  height: 0;
+  border-left: 10px solid transparent;
+  border-right: 10px solid transparent;
+  border-top: 10px solid var(--card-border);
+}

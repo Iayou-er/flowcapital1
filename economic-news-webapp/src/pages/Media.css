@@ -1,0 +1,57 @@
+/* ========================================
+   Media.css — 自媒体板块
+   ======================================== */
+
+.media-page {
+  padding: 0;
+  max-width: 100%;
+}
+
+/* Hero 区（薄款） */
+.media-hero {
+  min-height: 30vh;
+  display: flex;
+  align-items: center;
+  padding-top: 0;
+}
+
+.media-hero-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 40px 48px;
+  width: 100%;
+}
+
+.media-title {
+  font-size: 48px;
+  font-weight: 700;
+  font-family: var(--font-serif);
+  line-height: 1.15;
+  margin: 0 0 16px 0;
+  color: var(--frost);
+}
+
+html.light .media-title {
+  color: #0A2540;
+}
+
+.media-sources {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+
+/* 响应式 */
+@media (max-width: 768px) {
+  .media-hero {
+    min-height: auto;
+    padding-top: 40px;
+  }
+  .media-hero-inner {
+    padding: 40px 20px;
+  }
+  .media-title {
+    font-size: 32px;
+  }
+}

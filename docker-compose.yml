@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: flowcapital-api
+    restart: always
+    volumes:
+      - ./data:/opt/flowcapital/data
+      - ./logs:/opt/flowcapital/logs
+      - ./backup:/opt/flowcapital/backup
+      - ./.env:/opt/flowcapital/.env:ro
+    ports:
+      - "127.0.0.1:8001:8001"
+    environment:
+      - PYTHONPATH=/opt/flowcapital
+    command: python -m uvicorn backend.api.main:app --host 0.0.0.0 --port 8001 --workers 8 --backlog 2048 --limit-concurrency 100
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: flowcapital-scheduler
+    restart: always
+    volumes:
+      - ./data:/opt/flowcapital/data
+      - ./logs:/opt/flowcapital/logs
+      - ./backup:/opt/flowcapital/backup
+      - ./.env:/opt/flowcapital/.env:ro
+    environment:
+      - PYTHONPATH=/opt/flowcapital
+    command: python scripts/scheduler.py
+    depends_on:
+      - api
+
+  nginx:
+    image: nginx:alpine
+    container_name: flowcapital-nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./economic-news-webapp/build:/var/www/flowcapital:ro
+      - ./data/certbot:/etc/letsencrypt:ro
+    depends_on:
+      - api

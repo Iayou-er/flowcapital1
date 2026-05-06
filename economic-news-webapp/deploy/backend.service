@@ -1,0 +1,19 @@
+[Unit]
+Description=Economic News Backend API
+After=network.target redis.service
+Wants=redis.service
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/economic-news
+Environment=PATH=/opt/economic-news/venv/bin
+ExecStart=/opt/economic-news/venv/bin/uvicorn backend.api.main:app --host 127.0.0.1 --port 8001 --workers 2
+Restart=always
+RestartSec=5
+
+# 环境变量文件
+EnvironmentFile=/opt/economic-news/.env
+
+[Install]
+WantedBy=multi-user.target

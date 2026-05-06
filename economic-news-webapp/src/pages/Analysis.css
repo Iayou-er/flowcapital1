@@ -1,0 +1,270 @@
+/* ========================================
+   Analysis.css — 墨夜鎏金 分析页
+   ======================================== */
+
+.analysis {
+  padding: 0;
+  max-width: 100%;
+}
+
+/* 页面头部 */
+.analysis-header {
+  padding: 100px 24px 60px;
+  text-align: center;
+  position: relative;
+}
+
+.analysis-header .ant-typography {
+  font-size: 40px !important;
+  font-weight: 700 !important;
+  font-family: var(--font-serif) !important;
+  letter-spacing: -0.03em !important;
+  line-height: 1.1 !important;
+  color: var(--frost) !important;
+  margin-bottom: 12px !important;
+}
+
+.analysis-header-subtitle {
+  font-size: 16px;
+  color: var(--dim);
+  margin: 0;
+  max-width: 400px;
+  margin: 8px auto 0;
+}
+
+/* 控制面板 */
+.analysis-controls {
+  max-width: 800px;
+  margin: 0 auto 32px;
+  padding: 0 24px;
+}
+
+.analysis .ant-card-body {
+  padding: 16px 20px !important;
+}
+
+/* 统计条 */
+.total-bar {
+  max-width: 800px;
+  margin: 0 auto 24px;
+  padding: 0 24px;
+}
+
+.total-bar-inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  color: var(--frost);
+}
+
+.mono {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 13px;
+  color: var(--gold);
+}
+
+/* 统计数字卡片 */
+.stat-card {
+  border: 1px solid var(--card-border) !important;
+  background: var(--card-bg) !important;
+  position: relative;
+  overflow: hidden;
+}
+
+.stat-card::after {
+  content: '';
+  position: absolute;
+  width: 100%;
+  height: 1px;
+  background: rgba(196, 163, 90, 0.08);
+  animation: scanMove 8s linear infinite;
+}
+
+@keyframes scanMove {
+  0% { top: -2px; }
+  100% { top: 100%; }
+}
+
+.stat-number {
+  font-size: 36px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+}
+
+.stat-label {
+  font-size: 13px;
+  color: var(--dim);
+  font-weight: 500;
+  margin-top: 4px;
+}
+
+/* 图表卡片 */
+.chart-card {
+  border: 1px solid var(--card-border) !important;
+  background: var(--card-bg) !important;
+}
+
+.chart-card .ant-card-head-title {
+  font-size: 16px !important;
+  font-weight: 600 !important;
+  color: var(--frost) !important;
+}
+
+/* 分析页通用卡片 */
+.analysis .ant-card {
+  border: 1px solid var(--card-border);
+  background: var(--card-bg);
+  box-shadow: none;
+  margin-bottom: 16px;
+  transition: all 0.4s;
+}
+
+.analysis .ant-card:hover {
+  border-color: var(--card-border-hover);
+  background: var(--bg-surface-hover);
+}
+
+.analysis .ant-card-head {
+  border-bottom: 1px solid var(--border-light);
+  background: transparent;
+  padding: 16px 20px 0;
+}
+
+.analysis .ant-card-head-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--frost);
+}
+
+.analysis .ant-card-body {
+  padding: 20px;
+}
+
+/* 时间范围选择 */
+.analysis .ant-radio-group {
+  margin-left: 12px;
+  background: var(--bg-surface) !important;
+  border-radius: var(--radius-sm) !important;
+  padding: 2px !important;
+  border: 1px solid var(--border) !important;
+}
+
+.analysis .ant-radio-button-wrapper {
+  height: 32px !important;
+  line-height: 28px !important;
+  padding: 0 16px !important;
+  border-radius: 5px !important;
+  font-size: 13px;
+  font-weight: 500;
+  border: none !important;
+  background: transparent !important;
+  color: var(--dim) !important;
+}
+
+.analysis .ant-radio-button-wrapper-checked {
+  background: rgba(196, 163, 90, 0.15) !important;
+  color: var(--gold) !important;
+  box-shadow: none !important;
+}
+
+/* 日期选择器 */
+.analysis .ant-picker-range {
+  margin-left: 12px;
+  height: 38px !important;
+  border-radius: var(--radius-sm) !important;
+  border: 1px solid var(--border) !important;
+  background: var(--bg-surface) !important;
+}
+
+.analysis .ant-picker-range:focus,
+.analysis .ant-picker-range-focused {
+  border-color: var(--gold) !important;
+  box-shadow: 0 0 0 3px rgba(196, 163, 90, 0.1) !important;
+}
+
+.analysis .ant-divider {
+  margin: 16px 0;
+  border-color: var(--border);
+}
+
+/* 关键词标签 */
+.analysis .keyword-chip {
+  display: inline-flex !important;
+  align-items: center;
+  padding: 6px 16px !important;
+  border-radius: var(--radius-sm) !important;
+  font-size: 13px;
+  font-weight: 500;
+  color: white;
+  transition: all var(--transition);
+  cursor: pointer;
+  border: none;
+}
+
+.analysis .keyword-chip:hover {
+  transform: scale(1.05);
+  filter: brightness(1.15);
+}
+
+/* 关键词浮窗 */
+.keyword-popover {
+  min-width: 200px;
+  text-align: center;
+  padding: 12px 0;
+}
+
+.keyword-popover-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--frost);
+  letter-spacing: -0.02em;
+  margin-bottom: 8px;
+}
+
+.keyword-popover-stat {
+  font-size: 14px;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+.keyword-popover-desc {
+  font-size: 12px;
+  color: var(--dim);
+}
+
+/* 响应式 */
+@media (max-width: 768px) {
+  .analysis-header {
+    padding: 80px 20px 40px;
+  }
+
+  .analysis-header .ant-typography {
+    font-size: 28px !important;
+  }
+
+  .analysis-controls {
+    padding: 0 16px;
+  }
+
+  .total-bar {
+    padding: 0 16px;
+  }
+
+  .stat-number {
+    font-size: 28px;
+  }
+
+  .analysis .ant-radio-group {
+    margin-left: 0;
+    display: block;
+    margin-top: 10px;
+  }
+
+  .analysis .ant-picker-range {
+    margin-left: 0;
+    margin-top: 10px;
+    width: 100%;
+  }
+}

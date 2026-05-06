@@ -1,0 +1,144 @@
+/* ========================================
+   NewsDetail.css — 墨夜鎏金 详情页
+   ======================================== */
+
+.news-detail {
+  padding: 0;
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+/* 详情页头部 */
+.news-detail-header {
+  padding: 80px 32px 40px;
+  text-align: center;
+}
+
+.news-detail-header h2 {
+  font-size: 28px !important;
+  font-weight: 700 !important;
+  font-family: var(--font-serif) !important;
+  color: var(--frost) !important;
+  line-height: 1.3 !important;
+  letter-spacing: -0.02em !important;
+  margin-bottom: 16px !important;
+}
+
+/* 返回按钮 */
+.news-detail .back-button {
+  margin-bottom: 16px;
+  height: 38px !important;
+  padding: 0 16px !important;
+  font-size: 14px !important;
+  border-radius: var(--radius-sm) !important;
+  color: var(--gold) !important;
+  border: 1px solid rgba(196, 163, 90, 0.25) !important;
+  background: transparent !important;
+}
+
+.news-detail .back-button:hover {
+  color: #d4b36a !important;
+  border-color: rgba(196, 163, 90, 0.5) !important;
+  background: rgba(196, 163, 90, 0.06) !important;
+}
+
+/* 内容卡片 */
+.news-detail .ant-card {
+  border: 1px solid var(--card-border) !important;
+  background: var(--card-bg) !important;
+  margin: 24px 32px;
+}
+
+/* 描述列表 */
+.news-detail .ant-descriptions {
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.news-detail .ant-descriptions-bordered .ant-descriptions-item-label {
+  font-weight: 600;
+  color: var(--frost);
+  background: transparent;
+  font-size: 13px;
+  border: none !important;
+}
+
+.news-detail .ant-descriptions-item-content {
+  color: var(--frost);
+  font-size: 14px;
+  border: none !important;
+}
+
+.news-detail .ant-descriptions-bordered .ant-descriptions-item-label,
+.news-detail .ant-descriptions-bordered .ant-descriptions-item-content {
+  border-color: transparent !important;
+  padding: 12px 16px !important;
+}
+
+/* 分割线 */
+.news-detail .ant-divider {
+  margin: 20px 0;
+  border-color: var(--border) !important;
+}
+
+.news-detail .ant-divider-inner-text {
+  color: var(--frost);
+  font-weight: 600;
+  font-size: 15px;
+}
+
+/* 标签 */
+.news-detail .ant-tag {
+  margin-right: 6px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: var(--radius-sm) !important;
+  height: auto !important;
+  display: inline-flex;
+  align-items: center;
+  font-weight: 500;
+}
+
+/* 正文 */
+.news-detail .news-content {
+  line-height: 1.9;
+  color: var(--frost);
+  white-space: pre-line;
+  padding: 8px 0 20px 0;
+  font-size: 15px;
+}
+
+/* 标题 */
+.news-detail h2.ant-typography {
+  color: var(--frost);
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: -0.02em;
+}
+
+/* 原文链接 */
+.news-detail a[target="_blank"] {
+  color: var(--gold);
+  word-break: break-all;
+  transition: color var(--transition);
+}
+
+.news-detail a[target="_blank"]:hover {
+  color: var(--gold-dim);
+}
+
+/* 响应式 */
+@media (max-width: 768px) {
+  .news-detail-header {
+    padding: 60px 20px 32px;
+  }
+
+  .news-detail-header h2 {
+    font-size: 22px !important;
+  }
+
+  .news-detail .ant-card {
+    margin: 16px;
+  }
+}

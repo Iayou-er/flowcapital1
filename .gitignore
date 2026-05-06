@@ -1,0 +1,55 @@
+# ========================================
+# 经济新闻分析系统 — .gitignore
+# ========================================
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+venv/
+.env
+
+# Node
+economic-news-webapp/node_modules/
+economic-news-webapp/build/
+economic-news-webapp/.env
+
+# 数据与日志
+data/*.db
+data/*.db-*
+data/*.sqlite
+data/*.sqlite3
+data/whoosh_index/
+logs/*.log
+backup/
+backups/
+cache/
+
+# 项目内部
+file-history/
+tasks/
+shell-snapshots/
+traceback.md
+history.jsonl
+paste-cache/
+plans/
+projects/
+sessions/
+settings.json
+
+# Claude 内部
+.claude/
+skills/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

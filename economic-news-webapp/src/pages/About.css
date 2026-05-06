@@ -1,0 +1,102 @@
+/* ========================================
+   About.css — 墨夜鎏金 关于页
+   ======================================== */
+
+.about-page {
+  padding: 0;
+  max-width: 100%;
+}
+
+/* 关于页头部 */
+.about-header {
+  padding: 100px 24px 48px;
+  text-align: center;
+}
+
+.about-header h2 {
+  font-size: 40px;
+  font-weight: 700;
+  font-family: var(--font-serif);
+  color: var(--frost);
+  margin: 0 0 8px 0;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+}
+
+.about-header-subtitle {
+  font-size: 16px;
+  color: var(--dim);
+  margin: 0;
+}
+
+/* 内容区 */
+.about-content {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 48px 24px;
+}
+
+.about-page .ant-card {
+  border: 1px solid var(--card-border) !important;
+  background: var(--card-bg) !important;
+  border-radius: var(--radius) !important;
+  box-shadow: none !important;
+  margin-bottom: 20px;
+}
+
+.about-page .ant-card-body {
+  padding: 20px !important;
+}
+
+.about-page .ant-divider {
+  margin: 20px 0;
+  border-color: var(--border) !important;
+}
+
+.about-page .ant-divider-inner-text {
+  color: var(--frost);
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.about-page .ant-list {
+  border: 1px solid var(--card-border) !important;
+  border-radius: var(--radius);
+}
+
+.about-page .ant-list-item {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-light);
+  font-size: 14px;
+  color: var(--frost);
+}
+
+.about-page .ant-list-item:last-child {
+  border-bottom: none;
+}
+
+.about-page .ant-space {
+  margin-top: 12px;
+  gap: 8px !important;
+}
+
+.about-page .ant-space .ant-typography {
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--frost);
+}
+
+/* 响应式 */
+@media (max-width: 768px) {
+  .about-header {
+    padding: 80px 20px 32px;
+  }
+
+  .about-header h2 {
+    font-size: 28px;
+  }
+
+  .about-content {
+    padding: 32px 16px;
+  }
+}

@@ -1,0 +1,136 @@
+/* ========================================
+   Category.css — 墨夜鎏金 分类页
+   ======================================== */
+
+.category-page {
+  padding: 0;
+  max-width: 100%;
+}
+
+/* 分类页头部 */
+.category-header {
+  padding: 100px 24px 48px;
+  text-align: center;
+}
+
+.category-title {
+  font-size: 40px;
+  font-weight: 700;
+  font-family: var(--font-serif);
+  color: var(--frost);
+  margin: 0 0 12px 0;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+}
+
+.category-header-subtitle {
+  font-size: 16px;
+  color: var(--dim);
+  margin: 0;
+}
+
+/* 分类网格 */
+.category-grid {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 48px 24px;
+}
+
+/* 分类卡片 */
+.category-card {
+  cursor: pointer;
+  border-radius: var(--radius) !important;
+  border: 1px solid var(--card-border) !important;
+  box-shadow: none !important;
+  transition: all 0.4s !important;
+  text-align: center;
+  background: var(--card-bg) !important;
+  padding: 24px 16px !important;
+  position: relative;
+  overflow: hidden;
+}
+
+.category-card:hover {
+  border-color: var(--card-border-hover) !important;
+  background: var(--bg-surface-hover) !important;
+  transform: translateY(-2px) !important;
+}
+
+html.light .category-card {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06) !important;
+}
+
+html.light .category-card:hover {
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.1) !important;
+}
+
+.category-icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+  line-height: 1;
+}
+
+.category-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--frost);
+  margin-bottom: 4px;
+  letter-spacing: -0.01em;
+}
+
+.category-count {
+  font-size: 13px;
+  color: var(--dim);
+}
+
+/* 分类新闻列表区 */
+.category-news {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 48px 24px;
+}
+
+.category-news-title {
+  font-size: 28px;
+  font-weight: 700;
+  font-family: var(--font-serif);
+  color: var(--frost);
+  margin-bottom: 28px;
+  letter-spacing: -0.02em;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.category-news-title::before {
+  content: '';
+  width: 4px;
+  height: 28px;
+  border-radius: 2px;
+  background: var(--gold);
+}
+
+/* 响应式 */
+@media (max-width: 768px) {
+  .category-header {
+    padding: 80px 20px 40px;
+  }
+
+  .category-title {
+    font-size: 28px;
+  }
+
+  .category-grid,
+  .category-news {
+    padding: 32px 16px;
+  }
+
+  .category-news-title {
+    font-size: 22px;
+    margin-bottom: 20px;
+  }
+
+  .category-icon {
+    font-size: 36px;
+  }
+}

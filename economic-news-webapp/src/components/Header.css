@@ -1,0 +1,253 @@
+/* ========================================
+   Header.css — 墨夜鎏金 导航
+   ======================================== */
+
+.header {
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  background: rgba(16, 19, 24, 0.8);
+  border-bottom: 1px solid rgba(196, 163, 90, 0.08);
+  box-shadow: none;
+  top: 0;
+  z-index: 100;
+  height: 56px !important;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  line-height: 56px;
+  position: sticky;
+}
+
+html.light .header {
+  background: rgba(255, 255, 255, 0.85);
+  border-bottom: 1px solid rgba(232, 117, 58, 0.12);
+  box-shadow: 0 1px 8px rgba(0, 0, 0, 0.04);
+}
+
+.header-inner {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 0 24px;
+  justify-content: space-between;
+}
+
+/* Logo */
+.logo-link {
+  text-decoration: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.logo-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  background: var(--gold);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.logo-text {
+  color: var(--frost);
+  font-size: 16px;
+  font-weight: 700;
+  font-family: var(--font-serif);
+  letter-spacing: -0.02em;
+  transition: opacity 0.3s;
+}
+
+.logo-text:hover {
+  opacity: 0.7;
+}
+
+/* 桌面导航菜单 */
+.header .desktop-menu {
+  background: transparent !important;
+  border: none !important;
+  height: 56px !important;
+  line-height: 56px !important;
+  flex: 1;
+  justify-content: flex-end;
+  margin-left: 40px;
+}
+
+.header .desktop-menu .ant-menu-item {
+  color: rgba(213, 208, 200, 0.55) !important;
+  transition: color 0.3s !important;
+  border-radius: 0 !important;
+  margin: 0 0 0 24px !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  height: 56px !important;
+  line-height: 56px !important;
+  min-width: auto !important;
+  padding: 0 8px !important;
+  position: relative;
+}
+
+.header .desktop-menu .ant-menu-item:hover,
+.header .desktop-menu .ant-menu-item-active {
+  color: var(--gold) !important;
+  background: transparent !important;
+}
+
+.header .desktop-menu .ant-menu-item a {
+  color: rgba(213, 208, 200, 0.55);
+  text-decoration: none;
+  transition: color 0.3s;
+}
+
+html.light .header .desktop-menu .ant-menu-item {
+  color: var(--frost) !important;
+}
+
+html.light .header .desktop-menu .ant-menu-item a {
+  color: var(--frost);
+}
+
+.header .desktop-menu .ant-menu-item a:hover {
+  color: var(--gold);
+}
+
+.header .desktop-menu .ant-menu-item-selected {
+  color: var(--gold) !important;
+  background: transparent !important;
+}
+
+.header .desktop-menu .ant-menu-item-selected a {
+  color: var(--gold);
+}
+
+/* 选中指示条 */
+.header .desktop-menu .ant-menu-item-selected::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 24px;
+  height: 2px;
+  background: var(--gold);
+  border-radius: 1px;
+}
+
+/* 右侧操作区 */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* 汉堡按钮 */
+.hamburger-btn {
+  display: none !important;
+  color: rgba(213, 208, 200, 0.55) !important;
+  font-size: 18px !important;
+  padding: 0 10px !important;
+  margin-left: 16px !important;
+  flex-shrink: 0;
+  height: 56px !important;
+}
+
+.hamburger-btn:hover {
+  color: var(--gold) !important;
+}
+
+/* 移动端抽屉 */
+.mobile-drawer .ant-drawer-content {
+  background: rgba(16, 19, 24, 0.97) !important;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: none;
+}
+
+html.light .mobile-drawer .ant-drawer-content {
+  background: rgba(255, 255, 255, 0.97) !important;
+}
+
+.mobile-drawer .ant-drawer-header {
+  background: transparent;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.mobile-drawer .ant-drawer-title {
+  color: var(--frost);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.mobile-drawer .ant-drawer-close {
+  color: var(--frost);
+}
+
+.mobile-drawer .ant-drawer-body {
+  padding: 8px 12px !important;
+  background: transparent !important;
+}
+
+.mobile-drawer .ant-menu {
+  background: transparent !important;
+  border: none;
+}
+
+.mobile-drawer .ant-menu-item {
+  color: var(--frost) !important;
+  background: rgba(255, 255, 255, 0.04) !important;
+  margin: 4px 0 !important;
+  border-radius: var(--radius-sm) !important;
+  font-weight: 500 !important;
+  font-size: 15px !important;
+  min-height: 44px !important;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.mobile-drawer .ant-menu-item a {
+  color: var(--frost) !important;
+  text-decoration: none;
+}
+
+.mobile-drawer .ant-menu-item:hover {
+  background: rgba(196, 163, 90, 0.08) !important;
+  border-color: rgba(196, 163, 90, 0.15);
+  color: var(--gold) !important;
+}
+
+.mobile-drawer .ant-menu-item-selected {
+  background: rgba(196, 163, 90, 0.15) !important;
+  border-color: rgba(196, 163, 90, 0.25);
+  color: var(--gold) !important;
+}
+
+.mobile-drawer .ant-menu-item-selected a {
+  color: var(--gold) !important;
+}
+
+/* 响应式 */
+@media (max-width: 768px) {
+  .desktop-menu {
+    display: none !important;
+  }
+
+  .hamburger-btn {
+    display: flex !important;
+  }
+
+  .header-inner {
+    padding: 0 16px;
+  }
+
+  .logo-text {
+    font-size: 15px;
+  }
+}

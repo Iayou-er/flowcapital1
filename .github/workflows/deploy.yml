@@ -1,0 +1,70 @@
+name: Deploy FlowCapital
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          cd scripts
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Syntax check
+        run: |
+          python -m py_compile backend/api/main.py
+          python -m py_compile backend/database/db_manager.py
+          python -m py_compile backend/crawler/news_crawler.py
+          echo "All syntax OK"
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install & Build
+        run: |
+          cd economic-news-webapp
+          npm ci
+          npm run build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build
+          path: economic-news-webapp/build/
+
+  deploy:
+    needs: [backend, frontend]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            cd /opt/flowcapital
+            git pull
+            pip install -r scripts/requirements.txt
+            cd economic-news-webapp && npm ci && npm run build
+            sudo cp -r build/* /var/www/flowcapital/
+            sudo systemctl restart flowcapital-api flowcapital-scheduler

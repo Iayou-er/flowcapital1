@@ -1,0 +1,194 @@
+/* ========================================
+   Sidebar.css — 侧边导航栏
+   ======================================== */
+
+.sidebar {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 64px;
+  background: var(--card-bg);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 16px 0;
+  z-index: 100;
+  transition: width 0.2s;
+}
+
+.sidebar:hover {
+  width: 180px;
+}
+
+/* Logo */
+.sidebar-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  text-decoration: none;
+  color: var(--gold);
+  margin-bottom: 24px;
+  width: 100%;
+  overflow: hidden;
+}
+
+.sidebar-logo-icon {
+  font-size: 22px;
+  flex-shrink: 0;
+}
+
+.sidebar-logo-text {
+  font-size: 18px;
+  font-weight: 700;
+  font-family: var(--font-serif);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.sidebar:hover .sidebar-logo-text {
+  opacity: 1;
+}
+
+/* 菜单 */
+.sidebar-menu {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 0 6px;
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  text-decoration: none;
+  color: var(--dim);
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.2s;
+  width: 100%;
+  overflow: hidden;
+}
+
+.sidebar-item:hover {
+  color: var(--frost);
+  background: var(--bg-surface);
+}
+
+.sidebar-item.active {
+  color: var(--gold);
+  background: var(--gold-subtle);
+  font-weight: 600;
+}
+
+.sidebar-icon {
+  font-size: 16px;
+  width: 18px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.sidebar-label {
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.sidebar:hover .sidebar-label {
+  opacity: 1;
+}
+
+/* 底部 */
+.sidebar-footer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0 0;
+  border-top: 1px solid var(--border-light);
+  width: 100%;
+}
+
+.sidebar-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  transition: background 0.3s;
+}
+
+.sidebar-dot.online {
+  background: var(--gold);
+}
+
+.sidebar-dot.offline {
+  background: var(--signal);
+}
+
+.sidebar-theme-btn {
+  background: none;
+  border: none;
+  color: var(--dim);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.sidebar-theme-btn:hover {
+  color: var(--frost);
+  background: var(--bg-surface);
+}
+
+/* 移动端 */
+.sidebar-mobile-btn {
+  display: none;
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 110;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  color: var(--frost);
+  font-size: 18px;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.sidebar-drawer-inner {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.sidebar-drawer-inner .sidebar-nav {
+  flex: 1;
+}
+
+@media (max-width: 768px) {
+  .sidebar {
+    display: none;
+  }
+
+  .sidebar-mobile-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+}

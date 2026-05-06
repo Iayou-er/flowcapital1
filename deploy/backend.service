@@ -1,0 +1,19 @@
+[Unit]
+Description=FlowCapital API Service
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/flowcapital
+Environment="PYTHONPATH=/opt/flowcapital"
+EnvironmentFile=/opt/flowcapital/.env
+ExecStart=/usr/bin/python3 -m uvicorn backend.api.main:app --host 127.0.0.1 --port 8001 --workers 8 --backlog 2048 --limit-concurrency 100 --log-level warning
+Restart=always
+RestartSec=5
+StandardOutput=append:/opt/flowcapital/logs/api.log
+StandardError=append:/opt/flowcapital/logs/api-error.log
+
+[Install]
+WantedBy=multi-user.target

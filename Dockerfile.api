@@ -1,0 +1,26 @@
+FROM python:3.11-slim
+
+WORKDIR /opt/flowcapital
+
+# 系统依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    chromium \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python 依赖
+COPY scripts/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m playwright install chromium
+
+# 代码
+COPY backend/ backend/
+COPY scripts/ scripts/
+COPY graph_rag/ graph_rag/
+
+# 数据目录
+RUN mkdir -p data logs backup
+
+ENV PYTHONPATH=/opt/flowcapital
+ENV PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
+
+EXPOSE 8001

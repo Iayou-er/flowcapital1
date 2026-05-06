@@ -1,0 +1,88 @@
+/* ========================================
+   GuestBook.css — 时间线留言板
+   ======================================== */
+
+.gb-page { max-width: 840px; margin: 0 auto; padding: 40px 24px 60px; }
+
+/* 头部 */
+.gb-hero { text-align: center; margin-bottom: 32px; }
+.gb-title { font-size: 32px; font-weight: 700; font-family: var(--font-serif); color: var(--frost); margin: 0 0 8px; }
+html.light .gb-title { color: #0A2540; }
+.gb-sub { font-size: 14px; color: var(--dim); margin: 0; }
+
+.gb-alert { margin-bottom: 20px; }
+
+/* 编辑器区域 */
+.gb-editor-area { margin-bottom: 40px; }
+.gb-editor {
+  background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 20px;
+}
+.gb-editor-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; }
+.gb-identity-tag {
+  font-size: 13px; padding: 4px 14px; border-radius: 6px; font-weight: 600;
+  color: var(--gold); background: var(--gold-subtle); border: none;
+}
+.gb-logout { background: none; border: none; color: var(--dim); font-size: 12px; cursor: pointer; }
+.gb-logout:hover { color: var(--signal); }
+
+.gb-input { border-radius: 8px; background: var(--bg); border-color: var(--border); color: var(--text); }
+.gb-input:focus { border-color: var(--gold); box-shadow: none; }
+.gb-editor textarea.ant-input { height: auto !important; padding: 77px 64px !important; }
+
+.gb-editor-bottom { display: flex; align-items: center; justify-content: space-between; margin-top: 15px; }
+.gb-count { font-size: 12px; color: var(--dim); }
+
+/* 登录入口 */
+.gb-login-hint {
+  display: flex; align-items: center; justify-content: center; gap: 16px;
+  background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 24px;
+}
+.gb-login-hint span { font-size: 14px; color: var(--dim); }
+
+/* 加载 / 空状态 */
+.gb-loading { text-align: center; padding: 60px; }
+.gb-empty { text-align: center; color: var(--dim); font-size: 14px; padding: 60px; }
+
+/* 时间线 */
+.gb-timeline { position: relative; padding-left: 40px; }
+.gb-timeline::before {
+  content: ''; position: absolute; left: 15px; top: 8px; bottom: 8px;
+  width: 2px; background: var(--border);
+}
+
+.gb-item { position: relative; margin-bottom: 24px; }
+
+.gb-dot {
+  position: absolute; left: -31px; top: 14px;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--gold); border: 2px solid var(--bg);
+  z-index: 1;
+}
+
+/* 留言卡片 */
+.gb-card {
+  background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px;
+  transition: border-color .2s;
+}
+.gb-card:hover { border-color: rgba(212,179,104,.25); }
+
+.gb-card-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.gb-card-id { font-size: 13px; font-weight: 600; color: var(--gold); }
+.gb-card-time { font-size: 12px; color: var(--dim); margin-left: auto; }
+
+.gb-card-body {
+  font-size: 14px; line-height: 1.8; color: var(--text); margin: 0;
+  white-space: pre-wrap; word-break: break-word;
+}
+
+/* 分页 */
+.gb-pager { text-align: center; margin-top: 24px; }
+
+/* 响应式 */
+@media (max-width: 768px) {
+  .gb-page { padding: 24px 16px; }
+  .gb-timeline { padding-left: 32px; }
+  .gb-timeline::before { left: 11px; }
+  .gb-dot { left: -27px; width: 8px; height: 8px; }
+  .gb-title { font-size: 24px; }
+}
