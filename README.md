@@ -115,6 +115,35 @@ docker-compose up -d
 2. 构建前端：`cd economic-news-webapp && npm run build`
 3. 部署 API + Nginx：参考 `deploy/nginx.conf` 和 `deploy/backend.service`
 
+## 热更新
+
+服务器上执行一条命令即可更新到最新版本：
+
+```bash
+cd /opt/flowcapital && ./update.sh
+```
+
+**首次配置：**
+
+```bash
+cat > /opt/flowcapital/update.sh << 'EOF'
+#!/bin/bash
+set -e
+cd /opt/flowcapital
+git pull
+source venv/bin/activate
+pip install -r scripts/requirements.txt -q
+cd economic-news-webapp
+npm run build
+cp -r build/* /var/www/flowcapital/
+cd /opt/flowcapital
+systemctl restart flowcapital-api flowcapital-scheduler
+echo "更新完成"
+EOF
+
+chmod +x /opt/flowcapital/update.sh
+```
+
 ## 许可证
 
 仅供学习和研究使用，请遵守相关法律法规和网站使用条款。
