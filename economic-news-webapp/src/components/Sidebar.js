@@ -92,6 +92,15 @@ const Sidebar = ({ isLight, onToggleTheme }) => {
             <span className="sidebar-logo-text">FlowCapital</span>
           </Link>
           {renderMenu(() => setMobileOpen(false))}
+          <div className="sidebar-footer">
+            <span
+              className={`sidebar-dot ${online ? 'online' : 'offline'}`}
+              title={online ? 'API 已连接' : 'API 连接断开'}
+            />
+            <button className="sidebar-theme-btn" onClick={onToggleTheme} title={isLight ? '夜间模式' : '日间模式'}>
+              {isLight ? <MoonOutlined /> : <SunOutlined />}
+            </button>
+          </div>
         </div>
       </Drawer>
     </>
