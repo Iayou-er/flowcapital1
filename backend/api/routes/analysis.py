@@ -433,6 +433,14 @@ async def article_clusters(
         raise HTTPException(status_code=500, detail=f"聚类失败: {e}")
 
 
+@analysis_router.post("/reload-dict")
+async def reload_finance_dict():
+    """热更新财经情感词典"""
+    from backend.analyzer.finance_sentiment_dict import reload_dict
+    reload_dict()
+    return {'code': 0, 'message': '词典已重载'}
+
+
 @analysis_router.get("/{article_id}")
 async def analyze_single_article(article_id: str):
     """分析单条新闻，返回情感、关键词和自动摘要"""

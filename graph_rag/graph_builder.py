@@ -1,9 +1,11 @@
 """
 图构建器模块
 将新闻内容转换为知识图谱
+支持实体名称归一化和多文章实体合并
 """
 import networkx as nx
 import json
+import re
 import logging
 from typing import List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
@@ -20,6 +22,25 @@ class GraphBuilder:
         self.graph = nx.DiGraph()
         self.llm_client = llm_client
         self.max_workers = max_workers
+        self._norm_index: Dict[str, str] = {}  # {归一化名称: 原始名称}
+
+    @staticmethod
+    def _normalize_entity_name(name: str) -> str:
+        """实体名称归一化：去除常见后缀/前缀差异"""
+        name = re.sub(r'[（(][^)）]*[)）]', '', name)
+        for suffix in ['公司', '有限公司', '股份有限公司', '集团', '科技']:
+            if name.endswith(suffix) and len(name) > len(suffix) + 1:
+                name = name[:-len(suffix)]
+                break
+        return name.strip()
+
+    def _rebuild_norm_index(self):
+        """从当前图的所有节点重建归一化索引。在 load_graph 或 build_knowledge_graph 后调用。"""
+        self._norm_index.clear()
+        for node in self.graph.nodes():
+            norm = self._normalize_entity_name(node)
+            if norm not in self._norm_index:
+                self._norm_index[norm] = node
 
     def build_entity_graph(self, articles: List[Dict]) -> nx.DiGraph:
         """
@@ -53,6 +74,7 @@ class GraphBuilder:
                 else:
                     self._add_to_graph(article, entities, relationships)
 
+        self._rebuild_norm_index()
         logger.info(f"知识图谱构建完成，包含 {self.graph.number_of_nodes()} 个节点和 {self.graph.number_of_edges()} 条边")
         return self.graph
 
@@ -152,21 +174,42 @@ class GraphBuilder:
             return []
 
     def _add_to_graph(self, article: Dict, entities: List[str], relationships: List[Dict]):
-        """将实体和关系添加到图中"""
+        """将实体和关系添加到图中（含名称归一化和实体合并）"""
         try:
             article_id = article.get('article_id', article.get('id', str(hash(article.get('title', 'unknown')))))
 
-            # 添加节点（实体）
+            # 添加节点（实体）— 含归一化合并
             for entity in entities:
-                if entity:  # 确保实体不为空
+                if not entity:
+                    continue
+                norm_name = self._normalize_entity_name(entity)
+
+                # O(1) 查找：用归一化名称索引定位已有实体
+                existing_name = self._norm_index.get(norm_name)
+
+                if existing_name:
+                    existing = self.graph.nodes[existing_name]
+                    refs = existing.get('ref_articles', [])
+                    if article_id not in refs:
+                        refs.append(article_id)
+                        if len(refs) > 50:
+                            refs = refs[-50:]
+                    self.graph.nodes[existing_name]['ref_articles'] = refs
+                    self.graph.nodes[existing_name]['ref_count'] = len(refs)
+                    self.graph.nodes[existing_name]['content_hash'] = article.get('content_hash', '')
+                else:
                     self.graph.add_node(
                         entity,
                         type="entity",
                         article_id=article_id,
                         title=article.get('title', ''),
                         source=article.get('source', ''),
-                        created_at=datetime.now().isoformat()
+                        created_at=datetime.now().isoformat(),
+                        ref_articles=[article_id],
+                        ref_count=1,
+                        content_hash=article.get('content_hash', ''),
                     )
+                    self._norm_index[norm_name] = entity
 
             # 添加边（关系）
             for rel in relationships:

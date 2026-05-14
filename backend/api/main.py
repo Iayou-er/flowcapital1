@@ -27,7 +27,7 @@ try:
 except ImportError:
     print("未安装 python-dotenv，仅使用系统环境变量 (pip install python-dotenv)")
 
-from backend.api.routes import news, analysis, graph_rag, guest_book
+from backend.api.routes import news, analysis, graph_rag, guest_book, events
 from backend.database.redis_client import redis_client
 from backend.middleware.rate_limiter import rate_limiter, RATE_LIMIT_CONFIG, DEFAULT_RATE_LIMIT
 
@@ -142,6 +142,7 @@ app.include_router(news.news_router, prefix="/api")
 app.include_router(analysis.analysis_router, prefix="/api")
 app.include_router(graph_rag.graph_rag_router, prefix="/api")
 app.include_router(guest_book.guest_book_router, prefix="/api")
+app.include_router(events.events_router, prefix="/api")
 
 
 # ── 管理后台 ──

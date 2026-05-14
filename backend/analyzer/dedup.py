@@ -70,6 +70,41 @@ class NewsDeduplicator:
         self.threshold = threshold
         self._segments = 4  # 将 64 位分 4 段，每段 16 位
 
+    @staticmethod
+    def _compute_fingerprint(text: str) -> int:
+        """计算文本的 SimHash 指纹"""
+        import jieba
+        tokens = [w for w in jieba.lcut(text) if len(w) > 1]
+        if not tokens:
+            return 0
+        sh = SimHash(tokens)
+        return sh.hash
+
+    @staticmethod
+    def _hamming_distance(h1: int, h2: int) -> int:
+        """计算两个 SimHash 指纹的汉明距离"""
+        x = h1 ^ h2
+        return bin(x).count('1')
+
+    def is_duplicate_cross_batch(self, text: str, redis_client, db) -> bool:
+        """
+        与近期（24h内）已入库新闻做 SimHash 比对。
+        从 DB 查询最近 500 条新闻的 article_id，再从 Redis 批量获取指纹。
+
+        注意：此方法仅对当前批次中无 url 的新闻调用；
+        有 URL 的新闻跨批次由 INSERT OR REPLACE 自动处理。
+        """
+        fingerprint = self._compute_fingerprint(text)
+        if fingerprint == 0:
+            return False
+
+        recent_ids = db.get_recent_article_ids(limit=500)
+        for aid in recent_ids:
+            fp_str = redis_client.get(f'simhash:{aid}')
+            if fp_str and self._hamming_distance(fingerprint, int(fp_str)) <= 3:
+                return True
+        return False
+
     def deduplicate(self, articles: List[Dict]) -> List[Dict]:
         """
         对新闻列表去重，桶索引优化

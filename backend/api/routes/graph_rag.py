@@ -49,6 +49,8 @@ class GraphQueryRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=500, description="查询问题")
     k: int = Field(5, ge=1, le=20, description="返回结果数量")
     use_cache: bool = True
+    from_date: str = None
+    to_date: str = None
 
 class GraphBuildRequest(BaseModel):
     limit: int = Field(100, ge=1, le=500, description="构建新闻数量限制")
@@ -71,7 +73,9 @@ async def query_graph_rag(request: GraphQueryRequest):
         result = engine.query_graph(
             question=request.query,
             k=request.k,
-            use_cache=request.use_cache
+            use_cache=request.use_cache,
+            from_date=request.from_date,
+            to_date=request.to_date,
         )
         return {"code": 0, "data": result}
     except Exception as e:
@@ -128,6 +132,27 @@ async def get_entity_info(entity_name: str = Path(..., min_length=1, max_length=
     except Exception as e:
         logger.error(f"获取实体信息失败: {e}")
         raise HTTPException(status_code=500, detail="获取实体信息失败")
+
+
+class EntityTimelineRequest(BaseModel):
+    entity: str = Field(..., min_length=1, max_length=100, description="实体名称")
+    days: int = Field(7, ge=1, le=90, description="时间窗口（天）")
+
+
+@graph_rag_router.post("/entity-timeline")
+async def entity_timeline(request: EntityTimelineRequest):
+    """获取实体时间线摘要"""
+    engine = get_graph_rag_engine()
+    if not engine:
+        raise HTTPException(status_code=503, detail="GraphRAG引擎未就绪")
+    try:
+        result = engine.build_entity_timeline(request.entity, days=request.days)
+        if 'error' in result:
+            return {"code": 1, "data": result}
+        return {"code": 0, "data": result}
+    except Exception as e:
+        logger.error(f"实体时间线查询失败: {e}")
+        raise HTTPException(status_code=500, detail="实体时间线查询失败")
 
 
 @graph_rag_router.post("/query-test")

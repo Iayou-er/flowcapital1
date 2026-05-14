@@ -1,6 +1,7 @@
 """
 情感分析模块
 优先使用 SnowNLP 进行中文情感分析，支持 LLM 增强模式
+叠加财经领域词典修正金融语境误判
 """
 
 import logging
@@ -16,6 +17,10 @@ try:
 except ImportError:
     HAS_SNOWNLP = False
     logger.warning("SnowNLP 未安装，将使用基础词典情感分析。pip install snownlp")
+
+from backend.analyzer.finance_sentiment_dict import (
+    POSITIVE_WORDS, NEGATIVE_WORDS, MODIFIERS, NEGATION_PREFIXES
+)
 
 
 class SentimentAnalyzer:
@@ -54,14 +59,17 @@ class SentimentAnalyzer:
                 - positive_words: 正面关键词列表
                 - negative_words: 负面关键词列表
                 - confidence: 置信度 (0.0 ~ 1.0)
+                - finance_hits: 财经词典命中词列表
         """
         if not text or not text.strip():
             return self._empty_result()
 
         if HAS_SNOWNLP:
-            return self._snownlp_analysis(text)
+            result = self._snownlp_analysis(text)
         else:
-            return self._dict_analysis(text)
+            result = self._dict_analysis(text)
+
+        return self._apply_finance_dict(text, result)
 
     def _snownlp_analysis(self, text: str) -> Dict:
         """使用 SnowNLP 进行情感分析"""
@@ -196,6 +204,79 @@ class SentimentAnalyzer:
             'confidence': round(confidence, 4)
         }
 
+    @staticmethod
+    def _match_sentiment_words(text: str, word_list: list) -> list:
+        """
+        按词长降序匹配，已匹配区间加锁防止子串冲突。
+        返回 [(word, weight, position), ...]
+        """
+        hits = []
+        occupied = set()
+
+        for word, weight in sorted(word_list, key=lambda x: -len(x[0])):
+            start = 0
+            while True:
+                pos = text.find(word, start)
+                if pos == -1:
+                    break
+                positions = set(range(pos, pos + len(word)))
+                if not positions & occupied:
+                    occupied |= positions
+                    hits.append((word, weight, pos))
+                start = pos + 1
+
+        return hits
+
+    def _apply_finance_dict(self, text: str, base_result: dict) -> dict:
+        """在 SnowNLP/词典 结果之上叠加财经词典"""
+        finance_score = 0.0
+        hit_words = []
+
+        all_hits = []
+        all_hits.extend(self._match_sentiment_words(text, POSITIVE_WORDS))
+        all_hits.extend(self._match_sentiment_words(text, NEGATIVE_WORDS))
+
+        for word, weight, pos in all_hits:
+            # 查找前文否定前缀（10 字符窗口内）
+            prefix = text[max(0, pos - 10):pos]
+            negated = any(neg in prefix for neg in NEGATION_PREFIXES)
+            # 同时检查是否有否定词紧邻（如"不构成利好"）
+            if not negated and pos > 0 and text[pos - 1] == '不':
+                negated = True
+
+            # 查找前文程度修饰词（20 字符窗口内）
+            modifier = 1.0
+            prefix_20 = text[max(0, pos - 20):pos]
+            for mod_word, mod_weight in sorted(MODIFIERS.items(), key=lambda x: -len(x[0])):
+                if mod_word in prefix_20:
+                    modifier = mod_weight
+                    break
+
+            effective = (-weight if negated else weight) * modifier
+            finance_score += effective
+            neg_label = '(否定反转)' if negated else ''
+            hit_words.append(f'{effective:+.1f}:{word}{neg_label}(x{modifier})')
+
+        # 融合权重: SnowNLP 0.6 + 财经词典 0.4
+        base_score = base_result.get('sentiment_score', 0.0)
+        clipped_finance = max(-1.0, min(1.0, finance_score))
+        final_score = round(base_score * 0.6 + clipped_finance * 0.4, 4)
+        final_score = max(-1.0, min(1.0, final_score))
+
+        if final_score > 0.15:
+            label = 'positive'
+        elif final_score < -0.15:
+            label = 'negative'
+        else:
+            label = 'neutral'
+
+        return {
+            **base_result,
+            'sentiment_score': final_score,
+            'sentiment_label': label,
+            'finance_hits': hit_words,
+        }
+
     def _empty_result(self) -> Dict:
         """返回空情感分析结果"""
         return {
@@ -203,7 +284,8 @@ class SentimentAnalyzer:
             'sentiment_label': 'neutral',
             'positive_words': [],
             'negative_words': [],
-            'confidence': 0.0
+            'confidence': 0.0,
+            'finance_hits': [],
         }
 
     def analyze_multiple_texts(self, texts: List[str]) -> List[Dict]:

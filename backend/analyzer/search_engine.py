@@ -171,12 +171,24 @@ def remove_document(article_id: str):
 
 
 def optimize_index():
-    """压缩优化索引（建议在每日调度任务中调用）"""
+    """压缩优化索引（建议在每日调度任务中调用），输出健康指标"""
     try:
         idx = _get_index()
-        writer = idx.writer()
-        writer.commit(optimize=True)
-        logger.info("Whoosh 索引优化完成")
+        reader = idx.reader()
+        doc_count = reader.doc_count()
+        doc_count_all = reader.doc_count_all()
+        deleted = doc_count_all - doc_count
+        reader.close()
+
+        logger.info(f"索引健康: 文档={doc_count}, 已删除={deleted}, "
+                    f"删除率={deleted/max(doc_count_all,1)*100:.1f}%")
+
+        if deleted > 100:
+            writer = idx.writer()
+            writer.commit(optimize=True)
+            logger.info(f"索引优化完成，清理 {deleted} 条已删除文档")
+        else:
+            logger.debug(f"索引删除文档数 {deleted}，跳过优化")
     except Exception as e:
         logger.warning(f"索引优化失败: {e}")
 

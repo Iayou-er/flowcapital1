@@ -8,7 +8,7 @@ import os
 import sqlite3
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
 from .models import NewsArticle, AnalysisResult
 
@@ -232,6 +232,9 @@ class DatabaseManager:
         if 'summary' not in cols:
             self._execute('ALTER TABLE analysis_results ADD COLUMN summary TEXT', commit=True)
 
+        # URL 唯一索引（跨批次去重主防线，仅非空值）
+        self._execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_news_url ON news_articles(url) WHERE url IS NOT NULL AND url != ''", commit=True)
+
         # 单列索引
         self._execute('CREATE INDEX IF NOT EXISTS idx_news_article_id ON news_articles(article_id)', commit=True)
         self._execute('CREATE INDEX IF NOT EXISTS idx_news_source ON news_articles(source)', commit=True)
@@ -259,6 +262,27 @@ class DatabaseManager:
             )
         ''', commit=True)
         self._execute('CREATE INDEX IF NOT EXISTS idx_guestbook_time ON guest_book(created_at DESC)', commit=True)
+
+        # 用户行为埋点事件
+        self._execute('''
+            CREATE TABLE IF NOT EXISTS event_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT NOT NULL,
+                article_id TEXT,
+                client_id TEXT,
+                payload TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+        ''', commit=True)
+        self._execute('CREATE INDEX IF NOT EXISTS idx_event_type_time ON event_log(event_type, created_at)', commit=True)
+        self._execute('CREATE INDEX IF NOT EXISTS idx_event_article ON event_log(article_id)', commit=True)
+
+        # 迁移：为已有数据库添加 hotness_score 列
+        news_cols = [row[1] for row in self._execute("PRAGMA table_info(news_articles)").fetchall()]
+        if 'hotness_score' not in news_cols:
+            self._execute('ALTER TABLE news_articles ADD COLUMN hotness_score REAL DEFAULT 0.0', commit=True)
+            self._execute('CREATE INDEX IF NOT EXISTS idx_news_hotness ON news_articles(hotness_score DESC)', commit=True)
+
         logger.info("数据库表结构及索引初始化完成")
 
     def _invalidate_news_cache(self):
@@ -357,7 +381,21 @@ class DatabaseManager:
 
     def get_latest_news(self, limit: int = 100, offset: int = 0,
                         exclude_sources: List[str] = None) -> Tuple[List[Dict], int]:
-        """获取最新新闻（列表用轻量列，不含 content）"""
+        """获取最新新闻（列表用轻量列，不含 content），热度+新鲜度混合排序"""
+        now = datetime.now()
+        day_ago = (now - timedelta(days=1)).isoformat()
+        week_ago = (now - timedelta(days=7)).isoformat()
+        order_sql = '''
+            ORDER BY
+                CASE
+                    WHEN published_at >= ? THEN 1.0
+                    WHEN published_at >= ? THEN 0.5
+                    ELSE 0.1
+                END * 0.5
+                + COALESCE(hotness_score, 0) * 0.3
+                + MIN(COALESCE(LENGTH(tags) - LENGTH(REPLACE(tags, ',', '')) + CASE WHEN tags != '' THEN 1 ELSE 0 END, 0), 10) * 0.02
+                DESC
+        '''
         try:
             if exclude_sources:
                 placeholders = ','.join(['?'] * len(exclude_sources))
@@ -368,15 +406,16 @@ class DatabaseManager:
                 total = total_row[0] if total_row else 0
                 news = self._query(
                     f'SELECT {NEWS_COLUMNS_LIGHT} FROM news_articles WHERE source NOT IN ({placeholders}) '
-                    f'ORDER BY published_at DESC LIMIT ? OFFSET ?',
-                    tuple(exclude_sources) + (limit, offset)
+                    f'{order_sql} LIMIT ? OFFSET ?',
+                    (day_ago, week_ago) + tuple(exclude_sources) + (limit, offset)
                 )
             else:
                 total_row = self._query_one("SELECT COUNT(*) FROM news_articles")
                 total = total_row[0] if total_row else 0
                 news = self._query(
-                    f'SELECT {NEWS_COLUMNS_LIGHT} FROM news_articles ORDER BY published_at DESC LIMIT ? OFFSET ?',
-                    (limit, offset)
+                    f'SELECT {NEWS_COLUMNS_LIGHT} FROM news_articles '
+                    f'{order_sql} LIMIT ? OFFSET ?',
+                    (day_ago, week_ago, limit, offset)
                 )
             return news, total
         except Exception as e:
@@ -506,9 +545,16 @@ class DatabaseManager:
             f'SELECT * FROM news_articles WHERE article_id IN ({placeholders})',
             tuple(article_ids)
         )
-        # 按传入顺序返回
         news_map = {r['article_id']: r for r in results}
         return [news_map[aid] for aid in article_ids if aid in news_map]
+
+    def get_recent_article_ids(self, limit: int = 500) -> List[str]:
+        """获取最近入库的 article_id 列表（用于去重比对，不含 content）"""
+        rows = self._query(
+            'SELECT article_id FROM news_articles ORDER BY id DESC LIMIT ?',
+            (limit,)
+        )
+        return [r['article_id'] for r in rows]
 
     def get_news_count(self) -> int:
         """获取新闻总数"""
@@ -614,6 +660,54 @@ class DatabaseManager:
             return 0.0, 0, 0, 0
         except Exception:
             return 0.0, 0, 0, 0
+
+    # ── 用户行为埋点 ──
+
+    def insert_event(self, event_type: str, article_id: str = None,
+                     payload: str = None, client_id: str = None) -> bool:
+        """插入埋点事件（payload 已在调用方序列化为 JSON 字符串）"""
+        try:
+            self._execute(
+                'INSERT INTO event_log (event_type, article_id, payload, client_id, created_at) '
+                'VALUES (?, ?, ?, ?, ?)',
+                (event_type, article_id, payload, client_id, datetime.now().isoformat()),
+                commit=True
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"写入事件失败: {e}")
+            return False
+
+    def get_recent_events(self, hours: int = 24) -> List[Dict]:
+        """获取近期埋点事件"""
+        since = (datetime.now() - timedelta(hours=hours)).isoformat()
+        return self._query(
+            'SELECT * FROM event_log WHERE created_at >= ? ORDER BY created_at DESC',
+            (since,)
+        )
+
+    # ── 热度分 ──
+
+    def update_hotness_scores(self, scores: Dict[str, float]):
+        """
+        覆盖写入文章热度分（非累加）。
+        每次计算时用当前窗口的聚合分直接替换旧值，天然实现衰减。
+        """
+        if not scores:
+            return
+        with self._wr_lock:
+            cursor = self._conn.cursor()
+            for aid, score in scores.items():
+                cursor.execute(
+                    'UPDATE news_articles SET hotness_score = ? WHERE article_id = ?',
+                    (round(score, 4), aid)
+                )
+            self._conn.commit()
+        self._invalidate_news_cache()
+
+    def reset_all_hotness_scores(self):
+        """将所有文章热度分归零（在重算前调用，单次 UPDATE 高效）"""
+        self._execute('UPDATE news_articles SET hotness_score = 0 WHERE hotness_score != 0', commit=True)
 
     def close(self):
         """关闭数据库连接（应用退出时调用）"""
