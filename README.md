@@ -7,7 +7,7 @@
 | 层级 | 技术 |
 |------|------|
 | 后端框架 | Python 3.8+, FastAPI, Uvicorn |
-| 数据库 | SQLite (WAL 模式 + 读写分离), Redis (自动降级) |
+| 数据库 | SQLite / PostgreSQL (SQLAlchemy 2.0 异步), Redis (自动降级) |
 | 爬虫 | Requests + BeautifulSoup + lxml + Playwright, ThreadPoolExecutor 并行 |
 | 分析 | SnowNLP (情感), jieba + TF-IDF (关键词), TextRank (摘要), SimHash 桶索引 (去重) |
 | 搜索 | Whoosh + jieba 中文分词 |
@@ -95,7 +95,7 @@ docker-compose up -d
 ```
 ├── backend/
 │   ├── crawler/          # 爬虫（25 源并行, HTTP 重试+断路器）
-│   ├── database/         # SQLite + Redis 缓存
+│   ├── database/         # SQLAlchemy async (SQLite/PostgreSQL) + Redis 缓存
 │   ├── analyzer/         # 情感分析/关键词/摘要/去重/搜索/翻译
 │   ├── api/              # FastAPI 路由（新闻/分析/图谱/留言）
 │   └── middleware/        # 频率限制
