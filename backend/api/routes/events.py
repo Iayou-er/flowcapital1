@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 
-from backend.database.db_manager import db
+from backend.database.db_manager_async import db_async as db
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ async def track_event(event: EventModel):
     payload 以 JSON 字符串存入，读取时 json.loads 还原
     """
     try:
-        db.insert_event(
+        await db.insert_event(
             event_type=event.type,
             article_id=event.article_id,
             payload=json.dumps(event.payload, ensure_ascii=False) if event.payload else None,

@@ -1,0 +1,50 @@
+groups:
+  - name: flowcapital
+    rules:
+      - alert: CrawlFailureRate
+        expr: |
+          rate(flowcapital_crawl_errors_total[15m]) > 0
+          and
+          rate(flowcapital_crawl_articles_total[15m]) > 0
+          and
+          rate(flowcapital_crawl_errors_total[15m]) / rate(flowcapital_crawl_articles_total[15m]) > 0.3
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "爬取失败率超过 30%"
+
+      - alert: SearchIndexLag
+        expr: flowcapital_search_index_lag > 100
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "搜索索引落后 {{ $value }} 条"
+
+      - alert: LLMCostSpike
+        expr: rate(flowcapital_llm_calls_total[1h]) > 200
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM 调用量异常飙升"
+
+      - alert: HighErrorRate
+        expr: |
+          rate(flowcapital_http_requests_total{status_code=~"5.."}[5m]) > 0
+          and
+          rate(flowcapital_http_requests_total{status_code=~"5.."}[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "5xx 错误率超过 5%"
+
+      - alert: ServiceDown
+        expr: up{job="flowcapital-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API 服务不可用"

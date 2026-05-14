@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Query
 from datetime import datetime, timedelta
 from collections import defaultdict
 import os
-from backend.database.db_manager import db
+from backend.database.db_manager_async import db_async as db
 from backend.database.redis_client import redis_client
 from backend.analyzer.sentiment import SentimentAnalyzer
 from backend.analyzer.text_analyzer import TextAnalyzer
@@ -47,25 +47,26 @@ def _get_time_boundary(time_range: str) -> str:
     return (now - timedelta(days=7)).strftime('%Y-%m-%d')
 
 
-def _build_analysis_map(article_ids):
+async def _build_analysis_map(article_ids):
     """从 analysis_results 表批量读取预计算结果"""
     if not article_ids:
         return {}
-    placeholders = ','.join(['?'] * len(article_ids))
+    params = {f"p{i}": aid for i, aid in enumerate(article_ids)}
+    placeholders = ", ".join(f":p{i}" for i in range(len(article_ids)))
     sql = (
         f"SELECT article_id, sentiment_score, sentiment_label, keywords, summary "
         f"FROM analysis_results WHERE article_id IN ({placeholders})"
     )
-    rows = db._query(sql, tuple(article_ids))
+    rows = await db.query_all(sql, params)
     result = {}
     for r in rows:
-        kw = r.get('keywords', '')
+        kw = r.keywords or ''
         keywords = [k.strip() for k in kw.split(',') if k.strip()] if kw else []
         result[r['article_id']] = {
-            'score': r['sentiment_score'] or 0.0,
-            'label': r['sentiment_label'] or 'neutral',
+            'score': r.sentiment_score or 0.0,
+            'label': r.sentiment_label or 'neutral',
             'keywords': keywords,
-            'summary': r.get('summary', '') or '',
+            'summary': r.summary or '',
         }
     return result
 
@@ -86,10 +87,10 @@ async def analyze_news(
 
         # ── 按时间范围过滤 ──
         if start_date and end_date:
-            news_list = db.get_news_by_date_range(start_date, end_date + ' 23:59:59')
+            news_list = await db.get_news_by_date_range(start_date, end_date + ' 23:59:59')
         else:
             boundary = _get_time_boundary(time_range)
-            news_list = db.get_news_by_date_range(boundary, '2099-12-31')
+            news_list = await db.get_news_by_date_range(boundary, '2099-12-31')
 
         # 排除自媒体源
         news_list = [n for n in news_list if n.get('source', '') not in MEDIA_SOURCES]
@@ -113,7 +114,7 @@ async def analyze_news(
 
         # ── 步骤1：优先从预计算结果读取，缺失的才并行计算 ──
         article_ids = [n['article_id'] for n in news_list if n.get('article_id')]
-        existing_map = _build_analysis_map(article_ids)
+        existing_map = await _build_analysis_map(article_ids)
 
         news_sentiments = []
         all_keywords = []
@@ -132,7 +133,6 @@ async def analyze_news(
         if missing_articles:
             import json
             from concurrent.futures import ThreadPoolExecutor, as_completed
-            from backend.database.models import AnalysisResult
             from backend.analyzer.text_analyzer import TextAnalyzer
             sentiment = _get_sentiment()
             text_analyzer = TextAnalyzer()
@@ -160,16 +160,16 @@ async def analyze_news(
                     try:
                         r = future.result(timeout=15)
                         if r:
-                            db.save_analysis_result(AnalysisResult(
-                                article_id=news.get('article_id', ''),
-                                model_used='snownlp',
-                                sentiment_score=r['score'],
-                                sentiment_label=r['label'],
-                                keywords=r['keywords'],
-                                summary=r['summary'],
-                                analysis_type='sentiment',
-                                result=r['raw'],
-                            ))
+                            await db.save_analysis_result({
+                                'article_id': news.get('article_id', ''),
+                                'model_used': 'snownlp',
+                                'sentiment_score': r['score'],
+                                'sentiment_label': r['label'],
+                                'keywords': r['keywords'],
+                                'summary': r['summary'],
+                                'analysis_type': 'sentiment',
+                                'result': r['raw'],
+                            })
                             news_sentiments[idx] = (r['score'], r['label'])
                             all_keywords.extend(r['keywords'])
                         else:
@@ -295,7 +295,7 @@ async def hero_stats():
         if cached is not None:
             return cached
 
-        total_news = db.get_news_count()
+        total_news = await db.get_news_count()
         if total_news == 0:
             result = {"code": 0, "data": {"totalNews": 0, "sentiment": {
                 "overallScore": 0, "overallLabel": "neutral", "confidence": 0,
@@ -304,7 +304,7 @@ async def hero_stats():
             redis_client.set(cache_key, result, ttl=_CACHE_TTL * 2)
             return result
 
-        avg_score, pos_count, neg_count, neu_count = db.get_sentiment_aggregate()
+        avg_score, pos_count, neg_count, neu_count = await db.get_sentiment_aggregate()
 
         if avg_score > 0.15:
             overall_label = 'positive'
@@ -346,7 +346,7 @@ async def sentiment_breakdown(
 
         from backend.analyzer.text_analyzer import TextAnalyzer
         boundary = _get_time_boundary(time_range)
-        news_list = db.get_news_by_date_range(boundary, '2099-12-31')
+        news_list = await db.get_news_by_date_range(boundary, '2099-12-31')
         news_list = [n for n in news_list if n.get('source', '') not in MEDIA_SOURCES]
 
         analyzer = TextAnalyzer()
@@ -368,14 +368,14 @@ async def extract_entities(
         analyzer = TextAnalyzer()
 
         if article_id:
-            news = db.get_news_by_article_id(article_id)
+            news = await db.get_news_by_article_id(article_id)
             if not news:
                 raise HTTPException(status_code=404, detail="新闻未找到")
             content = news.get('content', '') or news.get('summary', '')
             entities = analyzer.extract_entities(news.get('title', '') + ' ' + content)
             return {"code": 0, "data": {"article_id": article_id, "entities": entities}}
 
-        news_list, _ = db.get_latest_news(limit=limit, exclude_sources=MEDIA_SOURCES)
+        news_list, _ = await db.get_latest_news(limit=limit, exclude_sources=MEDIA_SOURCES)
         results = []
         for n in news_list:
             content = n.get('content', '') or n.get('summary', '')
@@ -401,7 +401,7 @@ async def hot_topics(
             return cached
 
         from backend.analyzer.text_analyzer import TextAnalyzer
-        news_list, _ = db.get_latest_news(limit=limit, exclude_sources=MEDIA_SOURCES)
+        news_list, _ = await db.get_latest_news(limit=limit, exclude_sources=MEDIA_SOURCES)
 
         topics = TextAnalyzer.detect_hot_topics(news_list, top_k=15)
         result = {"code": 0, "data": topics}
@@ -423,7 +423,7 @@ async def article_clusters(
             return cached
 
         from backend.analyzer.text_analyzer import TextAnalyzer
-        news_list, _ = db.get_latest_news(limit=limit, exclude_sources=MEDIA_SOURCES)
+        news_list, _ = await db.get_latest_news(limit=limit, exclude_sources=MEDIA_SOURCES)
 
         clusters = TextAnalyzer.cluster_articles(news_list, threshold=0.35)
         result = {"code": 0, "data": clusters}
@@ -450,7 +450,7 @@ async def analyze_single_article(article_id: str):
         if cached is not None:
             return cached
 
-        news = db.get_news_by_article_id(article_id)
+        news = await db.get_news_by_article_id(article_id)
         if not news:
             raise HTTPException(status_code=404, detail="新闻未找到")
 

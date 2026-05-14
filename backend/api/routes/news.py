@@ -5,8 +5,9 @@ from fastapi import APIRouter, HTTPException, Query, Path, Depends
 from pydantic import BaseModel, Field
 from typing import List, Optional
 import os
+import asyncio
 import logging
-from backend.database.db_manager import db
+from backend.database.db_manager_async import db_async as db
 from backend.database.redis_client import redis_client
 from backend.analyzer.translator import Translator
 from backend.api.auth import verify_api_key
@@ -51,7 +52,7 @@ async def get_latest_news(
         if cached is not None:
             return cached
         offset = (page - 1) * limit
-        news, total = db.get_latest_news(limit=limit, offset=offset, exclude_sources=EXCLUDED_SOURCES)
+        news, total = await db.get_latest_news(limit=limit, offset=offset, exclude_sources=EXCLUDED_SOURCES)
         result = {"code": 0, "data": news, "count": len(news), "total": total, "page": page}
         redis_client.set(cache_key, result, ttl=_CACHE_TTL)
         return result
@@ -73,11 +74,11 @@ EXCLUDED_SOURCES = MEDIA_SOURCES + ['知乎']
 async def get_fresh_check():
     """轻量接口：返回最新文章时间戳 + 总数，用于前端自动轮询"""
     try:
-        row = db._query_one(
-            "SELECT COUNT(*), MAX(published_at) FROM news_articles WHERE source NOT IN ({})".format(
-                ','.join('?' for _ in EXCLUDED_SOURCES)
-            ),
-            tuple(EXCLUDED_SOURCES)
+        params = {f"p{i}": s for i, s in enumerate(EXCLUDED_SOURCES)}
+        placeholders = ", ".join(f":p{i}" for i in range(len(EXCLUDED_SOURCES)))
+        row = await db.query_one(
+            f"SELECT COUNT(*), MAX(published_at) FROM news_articles WHERE source NOT IN ({placeholders})",
+            params
         )
         return {
             "code": 0,
@@ -102,7 +103,7 @@ async def get_media_news(
         if cached is not None:
             return cached
         offset = (page - 1) * limit
-        news, total = db.get_news_by_sources(MEDIA_SOURCES, limit=limit, offset=offset)
+        news, total = await db.get_news_by_sources(MEDIA_SOURCES, limit=limit, offset=offset)
         result = {"code": 0, "data": news, "count": len(news), "total": total, "page": page}
         redis_client.set(cache_key, result, ttl=_CACHE_TTL)
         return result
@@ -123,7 +124,7 @@ async def search_media(
             return {"code": 400, "data": [], "count": 0, "total": 0, "page": page}
 
         offset = (page - 1) * limit
-        results, total = db.search_media(MEDIA_SOURCES, query, limit=limit, offset=offset)
+        results, total = await db.search_media(MEDIA_SOURCES, query, limit=limit, offset=offset)
 
         return {"code": 0, "data": results, "count": len(results), "total": total, "page": page}
     except Exception as e:
@@ -156,7 +157,7 @@ async def search_news(
 
         from backend.analyzer.search_engine import search as fulltext_search
 
-        article_ids, total = fulltext_search(query, page=page, limit=limit, category=category, source=source)
+        article_ids, total = await asyncio.to_thread(fulltext_search, query, page=page, limit=limit, category=category, source=source)
 
         # Whoosh 空结果降级到 SQL LIKE
         if not article_ids:
@@ -164,18 +165,18 @@ async def search_news(
 
         # 根据 article_id 批量获取完整新闻，排除自媒体源
         results = [
-            r for r in db.get_news_by_article_ids(article_ids)
+            r for r in await db.get_news_by_article_ids(article_ids)
             if r.get('source', '') not in EXCLUDED_SOURCES
         ]
 
-        return {"code": 0, "data": results, "count": len(results), "total": total, "page": page}
+        return {"code": 0, "data": results, "count": len(results), "total": len(results), "page": page}
     except Exception as e:
         # 降级到传统 LIKE 搜索
         try:
             offset = (page - 1) * limit
-            results, total = db.search_news(keyword=query, limit=limit, offset=offset)
+            results, total = await db.search_news(keyword=query, limit=limit, offset=offset)
             results = [r for r in results if r.get('source', '') not in EXCLUDED_SOURCES]
-            return {"code": 0, "data": results, "count": len(results), "total": total, "page": page, "fallback": True}
+            return {"code": 0, "data": results, "count": len(results), "total": len(results), "page": page, "fallback": True}
         except Exception as fallback_err:
             logger.warning(f"Whoosh 搜索和 fallback LIKE 均失败: {e}, fallback: {fallback_err}")
             raise HTTPException(status_code=500, detail="搜索服务不可用")
@@ -185,7 +186,7 @@ async def search_news(
 async def get_categories():
     """获取所有可用分类及其新闻数量"""
     try:
-        categories = db.get_all_categories()
+        categories = await db.get_all_categories()
         return {"code": 0, "data": categories}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取分类失败: {e}")
@@ -204,7 +205,7 @@ async def get_news_by_category(
         if cached is not None:
             return cached
         offset = (page - 1) * limit
-        news, total = db.get_news_by_category(category=category, limit=limit, offset=offset, exclude_sources=EXCLUDED_SOURCES)
+        news, total = await db.get_news_by_category(category=category, limit=limit, offset=offset, exclude_sources=EXCLUDED_SOURCES)
         result = {"code": 0, "data": news, "count": len(news), "total": total, "page": page}
         redis_client.set(cache_key, result, ttl=_CACHE_TTL)
         return result
@@ -216,7 +217,7 @@ async def get_news_by_category(
 async def get_news_by_id(article_id: str = Path(..., max_length=200)):
     """获取特定新闻详情"""
     try:
-        news = db.get_news_by_article_id(article_id)
+        news = await db.get_news_by_article_id(article_id)
         if not news:
             raise HTTPException(status_code=404, detail="新闻未找到")
         return {"code": 0, "data": news}
@@ -233,7 +234,7 @@ async def translate_news(
 ):
     """翻译特定新闻"""
     try:
-        news = db.get_news_by_article_id(article_id)
+        news = await db.get_news_by_article_id(article_id)
         if not news:
             raise HTTPException(status_code=404, detail="新闻未找到")
 
@@ -311,7 +312,7 @@ async def find_duplicate_news(
     try:
         from backend.analyzer.dedup import NewsDeduplicator
 
-        news_list, _ = db.get_latest_news(limit=limit)
+        news_list, _ = await db.get_latest_news(limit=limit)
         if not news_list:
             return {"code": 0, "data": {"total": 0, "duplicate_pairs": []}}
 
@@ -345,11 +346,11 @@ async def rebuild_search_index(
     try:
         from backend.analyzer.search_engine import rebuild_index
 
-        news_list, total = db.get_latest_news(limit=limit)
+        news_list, total = await db.get_latest_news(limit=limit)
         if not news_list:
             return {"code": 0, "data": {"message": "无新闻可索引"}}
 
-        count = rebuild_index(news_list)
+        count = await asyncio.to_thread(rebuild_index, news_list)
         return {"code": 0, "data": {"message": f"索引完成，共索引 {count} 条新闻"}}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"重建索引失败: {e}")

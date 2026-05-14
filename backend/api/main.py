@@ -27,9 +27,11 @@ try:
 except ImportError:
     print("未安装 python-dotenv，仅使用系统环境变量 (pip install python-dotenv)")
 
-from backend.api.routes import news, analysis, graph_rag, guest_book, events
+from backend.api.routes import news, analysis, graph_rag, guest_book, events, metrics
+from backend.database.db_manager_async import db_async as db
 from backend.database.redis_client import redis_client
 from backend.middleware.rate_limiter import rate_limiter, RATE_LIMIT_CONFIG, DEFAULT_RATE_LIMIT
+from backend.middleware.security_headers import SecurityHeadersMiddleware
 
 _cleanup_task: asyncio.Task = None
 
@@ -86,6 +88,26 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-API-Key"],
 )
 app.add_middleware(GZipMiddleware, minimum_size=500)  # >500字节自动压缩
+app.add_middleware(SecurityHeadersMiddleware)        # 安全响应头
+
+
+@app.middleware("http")
+async def metrics_middleware(request: Request, call_next):
+    """HTTP 指标中间件 — 记录请求数和耗时到 Prometheus"""
+    import time as _time
+    t0 = _time.time()
+    response = await call_next(request)
+    duration = (_time.time() - t0) * 1000
+    try:
+        from backend.monitoring.metrics import HTTP_REQUESTS, HTTP_DURATION
+        path = request.url.path
+        HTTP_REQUESTS.labels(
+            method=request.method, path=path, status_code=str(response.status_code)
+        ).inc()
+        HTTP_DURATION.labels(method=request.method, path=path).observe(duration)
+    except Exception:
+        pass
+    return response
 
 
 @app.middleware("http")
@@ -143,6 +165,7 @@ app.include_router(analysis.analysis_router, prefix="/api")
 app.include_router(graph_rag.graph_rag_router, prefix="/api")
 app.include_router(guest_book.guest_book_router, prefix="/api")
 app.include_router(events.events_router, prefix="/api")
+app.include_router(metrics.metrics_router, prefix="")  # /metrics 不需要 /api 前缀
 
 
 # ── 管理后台 ──
@@ -163,14 +186,13 @@ async def admin_status():
         "analysis": {},
     }
     try:
-        from backend.database.db_manager import db
-        row = db._query_one("SELECT COUNT(*), MAX(created_at), MAX(published_at) FROM news_articles")
+        row = await db.query_one("SELECT COUNT(*), MAX(created_at), MAX(published_at) FROM news_articles")
         status["news"] = {
             "total": row[0] if row else 0,
             "last_crawled": row[1] or '',
             "latest_published": row[2] or '',
         }
-        row2 = db._query_one("SELECT COUNT(*) FROM analysis_results")
+        row2 = await db.query_one("SELECT COUNT(*) FROM analysis_results")
         status["analysis"] = {"total_analyzed": row2[0] if row2 else 0}
         status["database"]["status"] = "connected"
     except Exception as e:
@@ -278,8 +300,7 @@ async def health_check():
     # 检查 SQLite
     db_ok = False
     try:
-        from backend.database.db_manager import db
-        row = db._query_one("SELECT 1")
+        row = await db.query_one("SELECT 1")
         db_ok = row is not None
     except Exception:
         pass
@@ -296,8 +317,7 @@ async def health_check():
     # 数据库统计
     news_count = 0
     try:
-        from backend.database.db_manager import db
-        row = db._query_one("SELECT COUNT(*) FROM news_articles")
+        row = await db.query_one("SELECT COUNT(*) FROM news_articles")
         news_count = row[0] if row else 0
     except Exception:
         pass

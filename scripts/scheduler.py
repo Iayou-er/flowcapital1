@@ -7,11 +7,11 @@
 
 import hashlib
 import json
-import schedule
-import time
+import asyncio
 import logging
 import os
 import sys
+from datetime import datetime, timedelta
 
 # 项目根目录（脚本所在目录的父目录）
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -38,11 +38,25 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from backend.crawler.news_crawler import NewsCrawler
-from backend.database.db_manager import db
+from backend.database.db_manager_async import db_async as db, _IS_PG
 from backend.database.redis_client import redis_client
 from backend.analyzer.text_analyzer import TextAnalyzer
 from backend.analyzer.sentiment import SentimentAnalyzer, HAS_SNOWNLP
 from backend.analyzer.dedup import NewsDeduplicator
+
+# Prometheus 指标（scheduler 单进程，不设 PROMETHEUS_MULTIPROC_DIR）
+import os as _os
+if "PROMETHEUS_MULTIPROC_DIR" in _os.environ:
+    logger.warning("scheduler 检测到 PROMETHEUS_MULTIPROC_DIR，已忽略")
+    del _os.environ["PROMETHEUS_MULTIPROC_DIR"]
+
+from backend.monitoring.metrics import (
+    use_registry, CRAWL_ARTICLES, CRAWL_ERRORS, LLM_CALLS,
+    DEDUP_RATIO, SEARCH_INDEX_LAG, HOTNESS_ARTICLES_TOTAL,
+)
+from prometheus_client import push_to_gateway
+
+PUSHGATEWAY_URL = _os.getenv("PUSHGATEWAY_URL", "localhost:9091")
 
 # 模块级单例，避免每次调度重复创建
 _crawler = NewsCrawler(delay=0.1)
@@ -74,7 +88,7 @@ def _get_rag_engine():
     return _graph_rag_engine
 
 
-def _incremental_update_with_limit(article_dicts):
+async def _incremental_update_with_limit(article_dicts):
     """带 LLM 日调用上限的增量图谱更新"""
     global _DAILY_LLM_CALLS
     if _DAILY_LLM_CALLS >= _MAX_DAILY_LLM_CALLS:
@@ -84,11 +98,19 @@ def _incremental_update_with_limit(article_dicts):
     if _DAILY_LLM_CALLS + estimated > _MAX_DAILY_LLM_CALLS:
         article_dicts = article_dicts[:(_MAX_DAILY_LLM_CALLS - _DAILY_LLM_CALLS) // 2]
     engine = _get_rag_engine()
-    count = engine.incremental_update(article_dicts)
+    count = await engine.incremental_update(article_dicts)
     _DAILY_LLM_CALLS += count * 2
 
 
-def crawl_and_analyze_news():
+def _push_scheduler_metrics():
+    """推送 scheduler 指标到 Pushgateway"""
+    try:
+        push_to_gateway(PUSHGATEWAY_URL, job="flowcapital-scheduler", registry=use_registry)
+    except Exception as e:
+        logger.warning(f"Pushgateway 推送失败: {e}")
+
+
+async def crawl_and_analyze_news():
     """爬取和分析新闻的主任务 — 每 15 分钟执行一次"""
     global _crawl_running
     if _crawl_running:
@@ -108,6 +130,14 @@ def crawl_and_analyze_news():
 
         total_crawled = len(news_list)
         logger.info(f"成功爬取 {total_crawled} 条新闻")
+
+        # 指标：按数据源统计爬取量
+        source_counts = {}
+        for n in news_list:
+            src = n.get('source', 'unknown')
+            source_counts[src] = source_counts.get(src, 0) + 1
+        for src, cnt in source_counts.items():
+            CRAWL_ARTICLES.labels(source=src).inc(cnt)
 
         # 1.5.1 SimHash 批次内去重
         deduplicator = NewsDeduplicator(threshold=4)
@@ -147,6 +177,7 @@ def crawl_and_analyze_news():
         # 输出去重指标
         dedup_total = batch_deduped + url_deduped + cross_deduped
         dedup_rate = dedup_total / max(total_crawled, 1) * 100
+        DEDUP_RATIO.set(1 - len(news_list) / max(total_crawled, 1))
         logger.info(f"去重统计: 批次内SimHash={batch_deduped}, 批次内URL={url_deduped}, "
                     f"跨批次SimHash={cross_deduped}, 剩余={len(news_list)}, "
                     f"去重率={dedup_rate:.1f}%")
@@ -157,9 +188,8 @@ def crawl_and_analyze_news():
 
         # 2. 保存到数据库，识别增量新闻
         logger.info("正在保存新闻到数据库...")
-        from backend.database.models import NewsArticle
 
-        news_models = []
+        news_dicts = []
         for news in news_list:
             try:
                 url = news.get('url', '')
@@ -167,28 +197,27 @@ def crawl_and_analyze_news():
                     article_id = hashlib.md5(url.encode()).hexdigest()[:16]
                 else:
                     article_id = hashlib.md5(news.get('title', '').encode()).hexdigest()[:16]
-                news_model = NewsArticle(
-                    article_id=article_id,
-                    title=news.get('title', ''),
-                    content=news.get('content', ''),
-                    summary=news.get('summary', ''),
-                    url=news.get('url', ''),
-                    source=news.get('source', '新浪财经'),
-                    category=news.get('category', ''),
-                    published_at=news.get('published_at', ''),
-                    author=news.get('author', ''),
-                    read_count=news.get('read_count', 0),
-                    comment_count=news.get('comment_count', 0),
-                    tags=news.get('tags', [])
-                )
-                news_models.append(news_model)
+                news_dicts.append({
+                    'article_id': article_id,
+                    'title': news.get('title', ''),
+                    'content': news.get('content', ''),
+                    'summary': news.get('summary', ''),
+                    'url': news.get('url', ''),
+                    'source': news.get('source', '新浪财经'),
+                    'category': news.get('category', ''),
+                    'published_at': news.get('published_at', ''),
+                    'author': news.get('author', ''),
+                    'read_count': news.get('read_count', 0),
+                    'comment_count': news.get('comment_count', 0),
+                    'tags': news.get('tags', [])
+                })
             except Exception as e:
                 logger.error(f"转换新闻数据失败: {e}")
                 continue
 
-        if news_models:
-            success_count = db.save_news_articles(news_models)
-            logger.info(f"成功保存 {success_count} 条新闻到数据库")
+        if news_dicts:
+            success_count = await db.save_news_articles(news_dicts)
+            logger.info(f"新闻入库完成: 新写入 {success_count} 条, 跳过 {len(news_dicts) - success_count} 条已存在")
 
             # 写 SimHash 指纹到 Redis（24h TTL）
             for news in news_list:
@@ -205,17 +234,17 @@ def crawl_and_analyze_news():
             # 同步更新全文搜索索引（批量写入）
             try:
                 from backend.analyzer.search_engine import add_documents_batch
-                count = add_documents_batch([
+                count = await asyncio.to_thread(add_documents_batch, [
                     {
-                        'article_id': m.article_id,
-                        'title': m.title,
-                        'content': m.content,
-                        'summary': m.summary,
-                        'source': m.source,
-                        'category': m.category,
-                        'published_at': m.published_at,
+                        'article_id': m.get('article_id', ''),
+                        'title': m.get('title', ''),
+                        'content': m.get('content', ''),
+                        'summary': m.get('summary', ''),
+                        'source': m.get('source', ''),
+                        'category': m.get('category', ''),
+                        'published_at': m.get('published_at', ''),
                     }
-                    for m in news_models
+                    for m in news_dicts
                 ])
                 logger.info(f"全文搜索索引已同步更新 {count} 条")
             except Exception as e:
@@ -224,11 +253,11 @@ def crawl_and_analyze_news():
             # 搜索索引轻量一致性检查
             try:
                 from backend.analyzer.search_engine import _get_index
-                idx = _get_index()
+                idx = await asyncio.to_thread(_get_index)
                 reader = idx.reader()
                 indexed_count = reader.doc_count()
                 reader.close()
-                db_count = db.get_news_count()
+                db_count = await db.get_news_count()
                 lag = db_count - indexed_count
                 if lag > 50:
                     logger.warning(f"搜索索引落后 DB {lag} 条，将在凌晨全量修复")
@@ -239,27 +268,26 @@ def crawl_and_analyze_news():
 
         # 3. 仅对增量新闻做情感分析 + 关键词 + 摘要
         logger.info("正在进行新闻分析...")
-        if news_models:
-            from backend.database.models import AnalysisResult
+        if news_dicts:
             from concurrent.futures import ThreadPoolExecutor, as_completed
             positive_count = negative_count = neutral_count = 0
 
             unresolved = []
-            for news_model in news_models:
-                existing = db.get_analysis_by_article_id(news_model.article_id)
+            for nd in news_dicts:
+                existing = await db.get_analysis_by_article_id(nd['article_id'])
                 if not existing:
-                    unresolved.append(news_model)
+                    unresolved.append(nd)
 
             if unresolved:
-                def _analyze_full(news_model):
-                    text = (news_model.title + ' ' + (news_model.content or news_model.summary)[:300])
+                def _analyze_full(nd):
+                    text = (nd['title'] + ' ' + (nd['content'] or nd['summary'])[:300])
                     if not text.strip():
                         return None
                     s_result = _sentiment.analyze_sentiment(text)
-                    keywords = _analyzer.extract_keywords(news_model.content or news_model.summary or '', 8)
-                    summary = _analyzer.generate_summary(news_model.content or news_model.summary or '', max_sentences=3)
+                    keywords = _analyzer.extract_keywords(nd['content'] or nd['summary'] or '', 8)
+                    summary = _analyzer.generate_summary(nd['content'] or nd['summary'] or '', max_sentences=3)
                     return {
-                        'model': news_model,
+                        'article_id': nd['article_id'],
                         'sentiment_score': s_result['sentiment_score'],
                         'sentiment_label': s_result['sentiment_label'],
                         'keywords': keywords,
@@ -280,16 +308,16 @@ def crawl_and_analyze_news():
                                     negative_count += 1
                                 else:
                                     neutral_count += 1
-                                db.save_analysis_result(AnalysisResult(
-                                    article_id=r['model'].article_id,
-                                    model_used='snownlp' if HAS_SNOWNLP else 'dict',
-                                    sentiment_score=r['sentiment_score'],
-                                    sentiment_label=label,
-                                    keywords=r['keywords'],
-                                    summary=r['summary'],
-                                    analysis_type='full',
-                                    result=r['raw'],
-                                ))
+                                await db.save_analysis_result({
+                                    'article_id': r['article_id'],
+                                    'model_used': 'snownlp' if HAS_SNOWNLP else 'dict',
+                                    'sentiment_score': r['sentiment_score'],
+                                    'sentiment_label': label,
+                                    'keywords': r['keywords'],
+                                    'summary': r['summary'],
+                                    'analysis_type': 'full',
+                                    'result': r['raw'],
+                                })
                         except Exception as exc:
                             logger.warning(f"分析失败: {exc}")
 
@@ -302,12 +330,12 @@ def crawl_and_analyze_news():
             from backend.api.routes.news import MEDIA_SOURCES, EXCLUDED_SOURCES
             for page in [1, 2, 3]:
                 for limit in [12, 24]:
-                    news, total = db.get_latest_news(limit=limit, offset=(page-1)*limit,
+                    news, total = await db.get_latest_news(limit=limit, offset=(page-1)*limit,
                                                      exclude_sources=EXCLUDED_SOURCES)
                     redis_client.set(f'news:latest:{page}:{limit}',
                                      {'code': 0, 'data': news, 'count': len(news), 'total': total, 'page': page},
                                      ttl=900)
-                    mnews, mtotal = db.get_news_by_sources(MEDIA_SOURCES, limit=limit, offset=(page-1)*limit)
+                    mnews, mtotal = await db.get_news_by_sources(MEDIA_SOURCES, limit=limit, offset=(page-1)*limit)
                     redis_client.set(f'news:media:{page}:{limit}',
                                      {'code': 0, 'data': mnews, 'count': len(mnews), 'total': mtotal, 'page': page},
                                      ttl=900)
@@ -318,15 +346,15 @@ def crawl_and_analyze_news():
         # 5. 优化搜索索引
         try:
             from backend.analyzer.search_engine import optimize_index
-            optimize_index()
+            await asyncio.to_thread(optimize_index)
         except Exception as e:
             logger.warning(f"索引优化失败: {e}")
 
-        # 6. WAL checkpoint 清理（防止 WAL 文件无限增长）
+        # 6. WAL checkpoint 清理（防止 WAL 文件无限增长，仅 SQLite）
         try:
-            from backend.database.db_manager import db as _db
-            _db._execute_write('PRAGMA wal_checkpoint(TRUNCATE)', commit=True)
-            logger.info("WAL checkpoint 完成")
+            if not _IS_PG:
+                await db.execute_write('PRAGMA wal_checkpoint(TRUNCATE)')
+                logger.info("WAL checkpoint 完成")
         except Exception as e:
             logger.warning(f"WAL checkpoint 失败: {e}")
 
@@ -334,19 +362,20 @@ def crawl_and_analyze_news():
         try:
             article_dicts = [
                 {
-                    'article_id': m.article_id,
-                    'title': m.title,
-                    'content': m.content,
-                    'summary': m.summary,
-                    'source': m.source,
-                    'published_at': m.published_at,
+                    'article_id': m.get('article_id', ''),
+                    'title': m.get('title', ''),
+                    'content': m.get('content', ''),
+                    'summary': m.get('summary', ''),
+                    'source': m.get('source', ''),
+                    'published_at': m.get('published_at', ''),
                 }
-                for m in news_models
+                for m in news_dicts
             ]
-            _incremental_update_with_limit(article_dicts)
+            await _incremental_update_with_limit(article_dicts)
         except Exception as e:
             logger.warning(f"图谱增量更新失败: {e}")
 
+        _push_scheduler_metrics()
         logger.info("新闻爬取和分析任务执行完成")
 
     except Exception as e:
@@ -355,26 +384,27 @@ def crawl_and_analyze_news():
         _crawl_running = False
 
 
-def check_search_index_consistency():
+async def check_search_index_consistency():
     """
     全量对比 DB 和 Whoosh 索引的 article_id 差异，修复缺失条目。
     """
     from backend.analyzer.search_engine import _get_index, add_documents_batch
 
-    idx = _get_index()
+    idx = await asyncio.to_thread(_get_index)
     reader = idx.reader()
     indexed_ids = set(r['article_id'] for r in reader.all_stored_fields() if r.get('article_id'))
     reader.close()
 
-    db_ids = set(db.get_recent_article_ids(limit=10000))
+    db_ids = set(await db.get_recent_article_ids(limit=10000))
 
     missing = db_ids - indexed_ids
+    SEARCH_INDEX_LAG.set(len(missing))
     if not missing:
         logger.info("搜索索引全量一致性检查通过")
         return
 
     logger.warning(f"搜索索引缺失 {len(missing)} 条，开始修复...")
-    articles = db.get_news_by_article_ids(list(missing))
+    articles = await db.get_news_by_article_ids(list(missing))
     docs = [
         {
             'article_id': a['article_id'],
@@ -387,15 +417,13 @@ def check_search_index_consistency():
         }
         for a in articles
     ]
-    count = add_documents_batch(docs)
+    count = await asyncio.to_thread(add_documents_batch, docs)
     logger.info(f"索引修复完成: {count} 条")
 
 
-def update_hotness_scores():
+async def update_hotness_scores():
     """聚合过去 24h 事件，计算热度分（含时间衰减 + 防刷去重）"""
-    from datetime import datetime, timedelta
-
-    events = db.get_recent_events(hours=24)
+    events = await db.get_recent_events(hours=24)
     now = datetime.now()
 
     # 按 (client_id, article_id, event_type) 去重 → 每用户每文章每事件类型只计一次
@@ -434,18 +462,22 @@ def update_hotness_scores():
             raw_scores[aid] += 2 * decay
 
     # 先归零，再写入新值
-    db.reset_all_hotness_scores()
-    db.update_hotness_scores(raw_scores)
+    await db.reset_all_hotness_scores()
+    await db.update_hotness_scores(raw_scores)
 
     if raw_scores:
         logger.info(f"热度分更新完成: {len(raw_scores)} 篇文章")
 
+    HOTNESS_ARTICLES_TOTAL.set(len(raw_scores))
+
     # 清理 7 天前的旧事件
-    db._execute('DELETE FROM event_log WHERE created_at < ?',
-                ((datetime.now() - timedelta(days=7)).isoformat(),), commit=True)
+    await db.execute_write(
+        'DELETE FROM event_log WHERE created_at < :cutoff',
+        {"cutoff": (datetime.now() - timedelta(days=7)).isoformat()}
+    )
 
 
-def full_analysis():
+async def full_analysis():
     """
     每日凌晨全面分析任务 — 比常规爬取更重型
     包括：批量情感分析、分类统计、趋势报告生成、图谱全量重建、索引全量检查
@@ -460,10 +492,9 @@ def full_analysis():
 
         _analyzer_local = _analyzer
         _sentiment_local = _sentiment
-        from backend.database.models import AnalysisResult
 
         # 1. 获取近期所有新闻
-        news_list, total = db.get_latest_news(limit=500)
+        news_list, total = await db.get_latest_news(limit=500)
         logger.info(f"获取到 {total} 条新闻用于分析")
 
         if not news_list:
@@ -480,7 +511,7 @@ def full_analysis():
             aid = news.get('article_id')
             if not aid:
                 continue
-            existing = db.get_analysis_by_article_id(aid)
+            existing = await db.get_analysis_by_article_id(aid)
             if not existing:
                 unresolved.append(news)
 
@@ -520,16 +551,16 @@ def full_analysis():
                                 neutral_count += 1
                             total_score += r['sentiment_score']
                             analyzed_count += 1
-                            db.save_analysis_result(AnalysisResult(
-                                article_id=r['aid'],
-                                model_used='snownlp' if HAS_SNOWNLP else 'dict',
-                                sentiment_score=r['sentiment_score'],
-                                sentiment_label=label,
-                                keywords=r['keywords'],
-                                summary=r['summary'],
-                                analysis_type='full',
-                                result=r['raw'],
-                            ))
+                            await db.save_analysis_result({
+                                'article_id': r['aid'],
+                                'model_used': 'snownlp' if HAS_SNOWNLP else 'dict',
+                                'sentiment_score': r['sentiment_score'],
+                                'sentiment_label': label,
+                                'keywords': r['keywords'],
+                                'summary': r['summary'],
+                                'analysis_type': 'full',
+                                'result': r['raw'],
+                            })
                     except Exception as exc:
                         logger.warning(f"全量分析失败: {exc}")
 
@@ -563,34 +594,35 @@ def full_analysis():
         # 5. 优化搜索索引
         try:
             from backend.analyzer.search_engine import optimize_index
-            optimize_index()
+            await asyncio.to_thread(optimize_index)
         except Exception as e:
             logger.warning(f"索引优化失败: {e}")
 
         # 6. 搜索索引全量一致性检查
         try:
-            check_search_index_consistency()
+            await check_search_index_consistency()
         except Exception as e:
             logger.warning(f"搜索索引一致性检查失败: {e}")
 
         # 7. 全量重建知识图谱
         try:
             engine = _get_rag_engine()
-            engine.build_knowledge_graph(limit=500)
+            await engine.build_knowledge_graph(limit=500)
             logger.info("知识图谱全量重建完成")
         except Exception as e:
             logger.warning(f"知识图谱全量重建失败: {e}")
 
         # 8. 热度分计算 + 旧事件清理
         try:
-            update_hotness_scores()
+            await update_hotness_scores()
         except Exception as e:
             logger.warning(f"热度分计算失败: {e}")
 
-        # 9. WAL checkpoint 清理
+        # 9. WAL checkpoint 清理（仅 SQLite）
         try:
-            db._execute_write('PRAGMA wal_checkpoint(TRUNCATE)', commit=True)
-            logger.info("WAL checkpoint 完成")
+            if not _IS_PG:
+                await db.execute_write('PRAGMA wal_checkpoint(TRUNCATE)')
+                logger.info("WAL checkpoint 完成")
         except Exception as e:
             logger.warning(f"WAL checkpoint 失败: {e}")
 
@@ -602,28 +634,36 @@ def full_analysis():
         logger.error(f"每日全面分析任务出错: {e}", exc_info=True)
 
 
-def main():
+async def main():
     """主函数"""
     logger.info("启动经济新闻调度系统...")
 
-    # 每 15 分钟爬取一次最新新闻（轻量任务）
-    schedule.every(15).minutes.do(crawl_and_analyze_news)
+    async def _crawl_loop():
+        await crawl_and_analyze_news()
+        while True:
+            await asyncio.sleep(15 * 60)
+            await crawl_and_analyze_news()
 
-    # 每天凌晨 2 点执行一次全面分析（重型任务）
-    schedule.every().day.at("02:00").do(full_analysis)
+    async def _daily_loop():
+        now = datetime.now()
+        target = now.replace(hour=2, minute=0, second=0, microsecond=0)
+        if now >= target:
+            target += timedelta(days=1)
+        await asyncio.sleep((target - now).total_seconds())
+        await full_analysis()
+        while True:
+            await asyncio.sleep(24 * 3600)
+            await full_analysis()
 
     logger.info("调度器已启动，等待定时任务执行...")
     logger.info("  - 常规爬取: 每 15 分钟")
     logger.info("  - 全面分析: 每天凌晨 02:00")
 
-    # 立即执行一次常规爬取
-    crawl_and_analyze_news()
-
-    # 运行调度器
     try:
-        while True:
-            schedule.run_pending()
-            time.sleep(60)  # 每分钟检查一次
+        await asyncio.gather(
+            asyncio.create_task(_crawl_loop()),
+            asyncio.create_task(_daily_loop()),
+        )
     except KeyboardInterrupt:
         logger.info("调度器已停止")
     except Exception as e:
@@ -631,4 +671,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

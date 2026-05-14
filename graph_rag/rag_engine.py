@@ -66,7 +66,7 @@ class GraphRAGEngine:
 
     # ── 知识图谱构建 ──
 
-    def build_knowledge_graph(self, limit: int = 100) -> nx.DiGraph:
+    async def build_knowledge_graph(self, limit: int = 100) -> nx.DiGraph:
         """
         构建知识图谱
 
@@ -79,8 +79,8 @@ class GraphRAGEngine:
         logger.info("开始构建知识图谱...")
 
         try:
-            news_list = self.db_manager.get_latest_news(limit=limit)
-            logger.info(f"获取到 {len(news_list)} 篇新闻用于图谱构建")
+            news_list, total = await self.db_manager.get_latest_news(limit=limit)
+            logger.info(f"获取到 {len(news_list)}/{total} 篇新闻用于图谱构建")
 
             self.graph = self.graph_builder.build_entity_graph(news_list)
             self._last_build_time = datetime.now()
@@ -96,7 +96,7 @@ class GraphRAGEngine:
 
     # ── 增量更新 ──
 
-    def incremental_update(self, articles: list) -> int:
+    async def incremental_update(self, articles: list) -> int:
         """
         增量更新知识图谱：仅处理新增/变更文章，追加节点和边。
         通过 content_hash 检测内容变更，变更时删除旧节点后重新提取。
@@ -105,7 +105,7 @@ class GraphRAGEngine:
             实际处理的文章数
         """
         if not self.graph:
-            self.build_knowledge_graph(limit=50)
+            await self.build_knowledge_graph(limit=50)
             return 0
 
         # 构建 {article_id: content_hash}
@@ -164,7 +164,7 @@ class GraphRAGEngine:
 
     # ── 查询 ──
 
-    def query_graph(self, question: str, k: int = 5, use_cache: bool = True,
+    async def query_graph(self, question: str, k: int = 5, use_cache: bool = True,
                     from_date: str = None, to_date: str = None) -> Dict[str, Any]:
         """
         使用GraphRAG进行查询（支持时间范围参数）
@@ -189,12 +189,12 @@ class GraphRAGEngine:
         try:
             if not self.graph:
                 logger.info("知识图谱不存在，正在构建...")
-                self.build_knowledge_graph(limit=50)
+                await self.build_knowledge_graph(limit=50)
 
             relevant_entities = self._find_relevant_entities(question)
             logger.info(f"找到相关实体数量: {len(relevant_entities)}")
 
-            context = self._collect_context(question, relevant_entities,
+            context = await self._collect_context(question, relevant_entities,
                                              from_date=from_date, to_date=to_date)
             logger.info(f"收集到上下文长度: {len(context)}")
 
@@ -263,7 +263,7 @@ class GraphRAGEngine:
             logger.error(f"实体查找失败: {e}")
             return list(self.graph.nodes())[:20] if self.graph else []
 
-    def _collect_context(self, question: str, relevant_entities: List[str],
+    async def _collect_context(self, question: str, relevant_entities: List[str],
                          from_date: str = None, to_date: str = None) -> str:
         """收集图中实体的相关上下文（含时间筛选）"""
         try:
@@ -287,7 +287,7 @@ class GraphRAGEngine:
                     continue
 
             if self.db_manager and len(relevant_entities) > 0:
-                news_list = self.db_manager.get_latest_news(limit=20)
+                news_list, _ = await self.db_manager.get_latest_news(limit=20)
                 for news in news_list:
                     pub_at = news.get('published_at', '')
                     if from_date and pub_at < from_date:
@@ -347,7 +347,7 @@ class GraphRAGEngine:
 
     # ── 实体时间线 ──
 
-    def build_entity_timeline(self, entity: str, days: int = 7) -> dict:
+    async def build_entity_timeline(self, entity: str, days: int = 7) -> dict:
         """
         对某个实体的近期所有引用文章做 LLM 摘要合并，
         输出该实体在时间窗口内的关键变化。
@@ -368,7 +368,7 @@ class GraphRAGEngine:
 
         node = self.graph.nodes[matched]
         ref_ids = node.get('ref_articles', [])
-        articles = self.db_manager.get_news_by_article_ids(ref_ids)
+        articles = await self.db_manager.get_news_by_article_ids(ref_ids)
         cutoff = datetime.now() - timedelta(days=days)
         articles = [
             a for a in articles

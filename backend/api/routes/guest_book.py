@@ -9,9 +9,16 @@ import uuid
 import time
 from fastapi import APIRouter, HTTPException, Query, Depends, Request
 from pydantic import BaseModel, Field, field_validator
-from backend.database.db_manager import db
+from backend.database.db_manager_async import db_async as db
 from backend.database.redis_client import redis_client
 from backend.api.auth import verify_api_key
+
+try:
+    import nh3
+    _has_nh3 = True
+except ImportError:
+    nh3 = None
+    _has_nh3 = False
 
 guest_book_router = APIRouter(prefix="/guest", tags=["留言板"])
 
@@ -56,8 +63,11 @@ def _resolve_session(token: str) -> str | None:
 
 
 def _sanitize_text(text: str) -> str:
-    """清理用户输入，防止 XSS"""
-    text = html.escape(text)
+    """清理用户输入，防止 XSS（nh3 优先，回退到 html.escape）"""
+    if _has_nh3:
+        text = nh3.clean(text, tags=set(), attributes={}, strip=True)
+    else:
+        text = html.escape(text)
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
@@ -122,7 +132,7 @@ async def post_message(request: GuestMessageRequest):
         raise HTTPException(status_code=400, detail="留言内容不能为空")
 
     try:
-        success = db.save_guest_message(anonymous_id, content)
+        success = await db.save_guest_message(anonymous_id, content)
         if success:
             return {"code": 0, "data": {"message": "留言成功"}}
         else:
@@ -140,7 +150,7 @@ async def get_messages(
 ):
     """分页获取留言列表"""
     try:
-        messages, total = db.get_guest_messages(page=page, limit=limit)
+        messages, total = await db.get_guest_messages(page=page, limit=limit)
         return {"code": 0, "data": messages, "count": len(messages), "total": total, "page": page}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取留言失败: {e}")

@@ -8,7 +8,9 @@ User=www-data
 Group=www-data
 WorkingDirectory=/opt/flowcapital
 Environment="PYTHONPATH=/opt/flowcapital"
+Environment="PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc"
 EnvironmentFile=/opt/flowcapital/.env
+ExecStartPre=/bin/sh -c 'mkdir -p /tmp/prometheus_multiproc'
 ExecStart=/usr/bin/python3 -m uvicorn backend.api.main:app --host 127.0.0.1 --port 8001 --workers 8 --backlog 2048 --limit-concurrency 100 --log-level warning
 Restart=always
 RestartSec=5

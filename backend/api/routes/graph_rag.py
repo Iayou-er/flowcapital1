@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Path, Depends
 from typing import List, Dict, Any
 from pydantic import BaseModel, Field
 
-from backend.database.db_manager import db
+from backend.database.db_manager_async import db_async as db
 from backend.analyzer.text_analyzer import TextAnalyzer
 from graph_rag.rag_engine import GraphRAGEngine
 from graph_rag.llm_client import CloudLLMClient
@@ -70,7 +70,7 @@ async def query_graph_rag(request: GraphQueryRequest):
     if not engine:
         raise HTTPException(status_code=503, detail=f"GraphRAG引擎未就绪: {_graph_rag_init_error or '请配置LLM_API_KEY'}")
     try:
-        result = engine.query_graph(
+        result = await engine.query_graph(
             question=request.query,
             k=request.k,
             use_cache=request.use_cache,
@@ -93,7 +93,7 @@ async def build_knowledge_graph(
     if not engine:
         raise HTTPException(status_code=503, detail=f"GraphRAG引擎未就绪: {_graph_rag_init_error or '请配置LLM_API_KEY'}")
     try:
-        graph = engine.build_knowledge_graph(limit=request.limit)
+        graph = await engine.build_knowledge_graph(limit=request.limit)
         return {
             "code": 0,
             "data": {
@@ -146,7 +146,7 @@ async def entity_timeline(request: EntityTimelineRequest):
     if not engine:
         raise HTTPException(status_code=503, detail="GraphRAG引擎未就绪")
     try:
-        result = engine.build_entity_timeline(request.entity, days=request.days)
+        result = await engine.build_entity_timeline(request.entity, days=request.days)
         if 'error' in result:
             return {"code": 1, "data": result}
         return {"code": 0, "data": result}

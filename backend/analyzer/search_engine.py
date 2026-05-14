@@ -4,12 +4,14 @@
 """
 
 import os
+import asyncio
 import logging
 from typing import List, Dict, Optional, Tuple
 from whoosh.index import create_in, open_dir, Index
 from whoosh.fields import Schema, TEXT, ID, DATETIME
 from whoosh.qparser import QueryParser, MultifieldParser, GroupPlugin, FuzzyTermPlugin
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 import jieba
 import threading
 
@@ -17,6 +19,9 @@ logger = logging.getLogger(__name__)
 
 # 索引路径
 INDEX_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'data', 'whoosh_index')
+
+# 专用线程池执行 Whoosh I/O，避免与 FastAPI 共享默认线程池
+_whoosh_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="whoosh")
 
 
 class ChineseAnalyzer:
@@ -201,7 +206,7 @@ def search(
     source: str = None,
 ) -> Tuple[List[str], int]:
     """
-    全文搜索
+    全文搜索（Whoosh 后端）
 
     Args:
         query: 搜索查询（支持多词，如 "AI 芯片 半导体"）
@@ -248,3 +253,95 @@ def search(
     # 分页
     offset = (page - 1) * limit
     return article_ids[offset:offset + limit], total
+
+
+# ═══════════════════════════════════════════════════════════════
+# PostgreSQL 全文搜索（pg_jieba / zhparser tsvector）
+# 仅当 DATABASE_URL 为 PostgreSQL 时可用，Whoosh 作为 fallback
+# ═══════════════════════════════════════════════════════════════
+
+_IS_PG = None
+
+
+def _check_pg() -> bool:
+    global _IS_PG
+    if _IS_PG is None:
+        from backend.database.engine import DATABASE_URL
+        _IS_PG = DATABASE_URL.startswith("postgresql")
+    return _IS_PG
+
+
+async def search_pg(
+    query: str,
+    page: int = 1,
+    limit: int = 20,
+    category: str = None,
+    source: str = None,
+) -> Tuple[List[str], int]:
+    """
+    PostgreSQL 全文搜索（tsvector + tsquery）
+    要求 search_vector 列已通过触发器维护（见 migration 规范）
+    """
+    if not query or not query.strip():
+        return [], 0
+
+    from backend.database.engine import AsyncSessionLocal
+    from sqlalchemy import text
+
+    try:
+        async with AsyncSessionLocal() as session:
+            where_clauses = ["search_vector @@ plainto_tsquery('chinese', :query)"]
+            params = {"query": query, "limit": limit, "offset": (page - 1) * limit}
+
+            if category:
+                where_clauses.append("category = :category")
+                params["category"] = category
+            if source:
+                where_clauses.append("source = :source")
+                params["source"] = source
+
+            where_sql = " AND ".join(where_clauses)
+
+            count_row = (
+                await session.execute(
+                    text(f"SELECT COUNT(*) FROM news_articles WHERE {where_sql}"),
+                    params,
+                )
+            ).fetchone()
+            total = count_row[0] if count_row else 0
+
+            rows = (
+                await session.execute(
+                    text(
+                        f"SELECT article_id, ts_rank(search_vector, plainto_tsquery('chinese', :query)) AS rank "
+                        f"FROM news_articles WHERE {where_sql} "
+                        f"ORDER BY rank DESC LIMIT :limit OFFSET :offset"
+                    ),
+                    params,
+                )
+            ).fetchall()
+
+            article_ids = [r[0] for r in rows]
+            return article_ids, total
+    except Exception as e:
+        logger.warning(f"PG 全文搜索失败，回退到 Whoosh: {e}")
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(_whoosh_executor, search, query, page, limit, category, source)
+
+
+async def search_async(
+    query: str,
+    page: int = 1,
+    limit: int = 20,
+    category: str = None,
+    source: str = None,
+) -> Tuple[List[str], int]:
+    """统一搜索入口：PG 优先，Whoosh fallback"""
+    if _check_pg():
+        try:
+            return await search_pg(query, page, limit, category, source)
+        except Exception:
+            pass
+    # 同步 Whoosh 搜索（在专用线程池中执行，避免阻塞事件循环）
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_whoosh_executor, search, query, page, limit, category, source)

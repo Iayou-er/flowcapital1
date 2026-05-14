@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+Disallow: /api/admin/
+Crawl-delay: 5
