@@ -62,7 +62,7 @@ async def _build_analysis_map(article_ids):
     for r in rows:
         kw = r.keywords or ''
         keywords = [k.strip() for k in kw.split(',') if k.strip()] if kw else []
-        result[r['article_id']] = {
+        result[r.article_id] = {
             'score': r.sentiment_score or 0.0,
             'label': r.sentiment_label or 'neutral',
             'keywords': keywords,
