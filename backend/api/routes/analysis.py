@@ -136,22 +136,27 @@ async def analyze_news(
             from backend.analyzer.text_analyzer import TextAnalyzer
             sentiment = _get_sentiment()
             text_analyzer = TextAnalyzer()
+            _semaphore = _asyncio.Semaphore(4)
 
             async def _analyze_one(news):
-                content = news.get('content', '') or news.get('summary', '')
-                text = (news.get('title', '') + ' ' + content[:200])
-                if not text.strip():
-                    return None
-                s_result = await _asyncio.to_thread(sentiment.analyze_sentiment, text)
-                keywords = await _asyncio.to_thread(text_analyzer.extract_keywords, content, 8)
-                summary = await _asyncio.to_thread(text_analyzer.generate_summary, content, 3)
-                return {
-                    'score': s_result['sentiment_score'],
-                    'label': s_result['sentiment_label'],
-                    'keywords': keywords,
-                    'summary': summary,
-                    'raw': json.dumps(s_result, ensure_ascii=False),
-                }
+                async with _semaphore:
+                    content = news.get('content', '') or news.get('summary', '')
+                    text = (news.get('title', '') + ' ' + content[:200])
+                    if not text.strip():
+                        return None
+                    # 合并为一次 to_thread，减少线程池碎片化
+                    def _do_all():
+                        s_result = sentiment.analyze_sentiment(text)
+                        keywords = text_analyzer.extract_keywords(content, 8)
+                        summary = text_analyzer.generate_summary(content, 3)
+                        return {
+                            'score': s_result['sentiment_score'],
+                            'label': s_result['sentiment_label'],
+                            'keywords': keywords,
+                            'summary': summary,
+                            'raw': json.dumps(s_result, ensure_ascii=False),
+                        }
+                    return await _asyncio.to_thread(_do_all)
 
             tasks = [_analyze_one(news) for news, _ in missing_articles]
             results = await _asyncio.gather(*tasks, return_exceptions=True)
