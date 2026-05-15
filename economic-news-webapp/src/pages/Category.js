@@ -41,7 +41,7 @@ const Category = () => {
         const res = await api.get('/news/categories');
         if (!cancelled) {
           const cats = Array.isArray(res) ? res : [];
-          console.log('[Category] 分类数据:', cats);
+          if (process.env.NODE_ENV === 'development') console.log('[Category] 分类数据:', cats);
           setCategories(cats);
         }
       } catch (err) {
@@ -70,7 +70,7 @@ const Category = () => {
       setLoading(true);
       setError(null);
       const data = await api.get(`/news/category/${category}`, { params: { page, limit: pageSize }, signal: controller.signal });
-      console.log('[Category] 新闻数据:', data);
+      if (process.env.NODE_ENV === 'development') console.log('[Category] 新闻数据:', data);
       const newsArr = Array.isArray(data) ? data : [];
       setNews(newsArr);
       setTotal(data.total || newsArr.length || 0);

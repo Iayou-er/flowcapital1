@@ -47,7 +47,7 @@ async def lifespan(app: FastAPI):
             try:
                 rate_limiter.cleanup()
             except Exception:
-                pass
+                logging.getLogger(__name__).warning("频率限制器清理失败", exc_info=True)
 
     _cleanup_task = asyncio.create_task(_periodic_cleanup())
     yield
@@ -100,13 +100,13 @@ async def metrics_middleware(request: Request, call_next):
     duration = (_time.time() - t0) * 1000
     try:
         from backend.monitoring.metrics import HTTP_REQUESTS, HTTP_DURATION
-        path = request.url.path
+        path = request.scope.get("route", {}).path or request.url.path
         HTTP_REQUESTS.labels(
             method=request.method, path=path, status_code=str(response.status_code)
         ).inc()
         HTTP_DURATION.labels(method=request.method, path=path).observe(duration)
     except Exception:
-        pass
+        logging.getLogger('api.metrics').warning("指标记录失败", exc_info=True)
     return response
 
 
@@ -118,9 +118,10 @@ async def access_log_middleware(request: Request, call_next):
     response = await call_next(request)
     duration = (_time.time() - t0) * 1000
     logging.getLogger('api.access').info(
-        f'{request.client.host if request.client else "-"} '
-        f'{request.method} {request.url.path} '
-        f'{response.status_code} {duration:.0f}ms'
+        '%s %s %s %s %.0fms',
+        request.client.host if request.client else "-",
+        request.method, request.url.path,
+        response.status_code, duration
     )
     return response
 
@@ -169,8 +170,10 @@ app.include_router(metrics.metrics_router, prefix="")  # /metrics 不需要 /api
 
 
 # ── 管理后台 ──
-from fastapi import APIRouter
-admin_router = APIRouter(prefix="/api/admin", tags=["管理"])
+from fastapi import APIRouter, Depends
+from backend.api.auth import verify_api_key
+
+admin_router = APIRouter(prefix="/api/admin", tags=["管理"], dependencies=[Depends(verify_api_key)])
 
 
 @admin_router.get("/status")
@@ -216,6 +219,7 @@ async def admin_status():
             "free_gb": round(free / 1024**3, 1),
         }
     except Exception:
+        logging.getLogger(__name__).warning("管理状态: 磁盘使用查询失败", exc_info=True)
         status["disk"] = {"status": "unavailable"}
 
     return {"code": 0, "data": status}
@@ -234,7 +238,7 @@ async def custom_http_exception_handler(request, exc):
     else:
         detail = exc.detail
     if exc.status_code >= 500:
-        logger.error(f"HTTP {exc.status_code}: {exc.detail}", exc_info=True)
+        logger.error("HTTP %d: %s", exc.status_code, exc.detail, exc_info=True)
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -274,7 +278,7 @@ async def validation_exception_handler(request, exc):
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     """兜底全局异常处理 — 生产环境只返回通用消息"""
-    logger.error(f"未捕获异常: {exc}", exc_info=True)
+    logger.error("未捕获异常: %s", exc, exc_info=True)
     if IS_PRODUCTION:
         return JSONResponse(
             status_code=500,
@@ -303,7 +307,7 @@ async def health_check():
         row = await db.query_one("SELECT 1")
         db_ok = row is not None
     except Exception:
-        pass
+        logging.getLogger(__name__).warning("健康检查: 数据库连接失败", exc_info=True)
 
     # 检查 Whoosh
     whoosh_ok = False
@@ -312,7 +316,7 @@ async def health_check():
         idx = _get_index()
         whoosh_ok = idx is not None
     except Exception:
-        pass
+        logging.getLogger(__name__).warning("健康检查: Whoosh 索引不可用", exc_info=True)
 
     # 数据库统计
     news_count = 0
@@ -320,19 +324,19 @@ async def health_check():
         row = await db.query_one("SELECT COUNT(*) FROM news_articles")
         news_count = row[0] if row else 0
     except Exception:
-        pass
+        logging.getLogger(__name__).warning("健康检查: 统计查询失败", exc_info=True)
 
     return {
         "status": "ok" if (db_ok and whoosh_ok) else "degraded",
         "service": "经济新闻分析系统",
         "version": "1.0.0",
-        "uptime_seconds": int(time.time() - _start_time) if '_start_time' in dir() else 0,
+        "uptime_seconds": int(time.time() - _start_time),
         "metrics": {
             "news_count": news_count,
         },
         "checks": {
             "sqlite": "connected" if db_ok else "disconnected",
-            "redis": "connected" if redis_client.is_available() else "not_configured",
+            "redis": "connected" if await redis_client.is_available() else "not_configured",
             "whoosh": "ready" if whoosh_ok else "not_ready",
         }
     }

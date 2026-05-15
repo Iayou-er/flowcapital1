@@ -18,9 +18,7 @@ except ImportError:
     HAS_SNOWNLP = False
     logger.warning("SnowNLP 未安装，将使用基础词典情感分析。pip install snownlp")
 
-from backend.analyzer.finance_sentiment_dict import (
-    POSITIVE_WORDS, NEGATIVE_WORDS, MODIFIERS, NEGATION_PREFIXES
-)
+from backend.analyzer import finance_sentiment_dict as _fdict
 
 
 class SentimentAnalyzer:
@@ -233,13 +231,13 @@ class SentimentAnalyzer:
         hit_words = []
 
         all_hits = []
-        all_hits.extend(self._match_sentiment_words(text, POSITIVE_WORDS))
-        all_hits.extend(self._match_sentiment_words(text, NEGATIVE_WORDS))
+        all_hits.extend(self._match_sentiment_words(text, _fdict.POSITIVE_WORDS))
+        all_hits.extend(self._match_sentiment_words(text, _fdict.NEGATIVE_WORDS))
 
         for word, weight, pos in all_hits:
             # 查找前文否定前缀（10 字符窗口内）
             prefix = text[max(0, pos - 10):pos]
-            negated = any(neg in prefix for neg in NEGATION_PREFIXES)
+            negated = any(neg in prefix for neg in _fdict.NEGATION_PREFIXES)
             # 同时检查是否有否定词紧邻（如"不构成利好"）
             if not negated and pos > 0 and text[pos - 1] == '不':
                 negated = True
@@ -247,7 +245,7 @@ class SentimentAnalyzer:
             # 查找前文程度修饰词（20 字符窗口内）
             modifier = 1.0
             prefix_20 = text[max(0, pos - 20):pos]
-            for mod_word, mod_weight in sorted(MODIFIERS.items(), key=lambda x: -len(x[0])):
+            for mod_word, mod_weight in sorted(_fdict.MODIFIERS.items(), key=lambda x: -len(x[0])):
                 if mod_word in prefix_20:
                     modifier = mod_weight
                     break

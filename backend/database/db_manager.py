@@ -138,8 +138,8 @@ class DatabaseManager:
                         if commit:
                             self._conn.commit()
                         return cursor
-                    except Exception:
-                        pass
+                    except Exception as reconnect_err:
+                        logger.warning(f"写连接重连失败: {reconnect_err}")
                 self._conn.rollback()
                 logger.error(f"写 SQL 失败: {e}\n  SQL: {sql}")
                 raise
@@ -160,8 +160,8 @@ class DatabaseManager:
                         cursor = self._ro_conn.cursor()
                         cursor.execute(sql, params or ())
                         return cursor
-                    except Exception:
-                        pass
+                    except Exception as reconnect_err:
+                        logger.warning(f"读连接重连失败: {reconnect_err}")
                 raise
 
     def _execute(self, sql: str, params: tuple = None, commit: bool = False) -> Optional[sqlite3.Cursor]:
@@ -290,11 +290,8 @@ class DatabaseManager:
         try:
             # 懒加载，避免循环导入
             from .redis_client import redis_client
-            # 清除最新新闻缓存（分页 1-5，常见 limit）
-            for page in range(1, 6):
-                for limit in (15, 20, 50):
-                    redis_client.delete(f"news:latest:{page}:{limit}")
-                    redis_client.delete(f"news:media:{page}:{limit}")
+            from .cache import CacheManager
+            CacheManager.invalidate_news_list_sync()
         except Exception as e:
             logger.warning(f"清除新闻缓存失败: {e}")
 
@@ -715,8 +712,8 @@ class DatabaseManager:
             if hasattr(self, conn) and getattr(self, conn):
                 try:
                     getattr(self, conn).close()
-                except Exception:
-                    pass
+                except Exception as close_err:
+                    logger.debug(f"关闭{name}连接异常: {close_err}")
         logger.info("数据库连接已关闭")
 
     def __del__(self):
@@ -725,7 +722,7 @@ class DatabaseManager:
                 if hasattr(self, conn) and getattr(self, conn):
                     getattr(self, conn).close()
             except Exception:
-                pass
+                pass  # __del__ 中忽略所有异常，确保不阻塞 GC
 
 
 # 全局单例

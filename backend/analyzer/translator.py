@@ -156,7 +156,8 @@ class Translator:
     def _tencent_auth(self, payload: dict) -> str:
         """腾讯 API V3 签名 — 需安装 tencentcloud-sdk-python"""
         raise NotImplementedError(
-            "腾讯翻译 API 签名未实现，请使用 tencentcloud-sdk-python 或切换 TRANSLATE_API_TYPE=baidu"
+            "腾讯翻译 API 未配置。可通过环境变量 TRANSLATE_API_TYPE 切换为 baidu/google/mymemory，"
+            "或安装 tencentcloud-sdk-python 并配置 SecretId/SecretKey"
         )
 
     @staticmethod
@@ -178,8 +179,8 @@ class Translator:
             translated = data.get('responseData', {}).get('translatedText', '')
             if translated:
                 return translated
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"免费翻译降级失败: {e}")
 
         # 最终降级：截断原文 + 标注
         return f'[Translate required] {text[:200]}'

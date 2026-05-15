@@ -11,6 +11,8 @@ const notifyConnection = (online) => {
 };
 export const isApiOnline = () => _online;
 
+// API Key 由 Nginx 反向代理在服务端注入 X-API-Key 请求头
+// 不要在客户端 .env 中嵌入 API Key，会被打入 JS bundle 导致泄露
 const API_KEY = process.env.REACT_APP_API_KEY || '';
 
 const api = axios.create({
@@ -19,7 +21,6 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
     'Accept-Encoding': 'gzip, deflate',
-    ...(API_KEY ? { 'X-API-Key': API_KEY } : {}),
   }
 });
 

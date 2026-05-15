@@ -129,16 +129,21 @@ class CloudLLMClient:
 
     def _get_baidu_token(self) -> str:
         """获取百度千帆 access_token"""
-        # 从 API Key 和 Secret Key 获取 token
-        # api_key 格式: "API_KEY|SECRET_KEY"
         parts = self.api_key.split('|')
         if len(parts) != 2:
             raise ValueError("百度API密钥格式错误，应为 'API_KEY|SECRET_KEY'")
 
         api_key, secret_key = parts[0], parts[1]
-        url = f"https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id={api_key}&client_secret={secret_key}"
-
-        response = requests.post(url, timeout=10)
+        # 使用 POST body 而非 URL 查询参数，防止密钥被代理/负载均衡日志记录
+        response = requests.post(
+            "https://aip.baidubce.com/oauth/2.0/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": api_key,
+                "client_secret": secret_key,
+            },
+            timeout=10,
+        )
         response.raise_for_status()
         return response.json().get('access_token', '')
 

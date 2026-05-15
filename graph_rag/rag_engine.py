@@ -5,7 +5,8 @@ GraphRAG引擎模块
 """
 import networkx as nx
 import hashlib
-import pickle
+import json
+import asyncio
 import logging
 import os
 from typing import List, Dict, Any, Optional, Tuple
@@ -16,7 +17,7 @@ from graph_rag.graph_builder import GraphBuilder
 
 logger = logging.getLogger(__name__)
 
-GRAPH_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'knowledge_graph.pkl')
+GRAPH_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'knowledge_graph.json')
 
 
 class GraphRAGEngine:
@@ -39,22 +40,23 @@ class GraphRAGEngine:
     # ── 图持久化 ──
 
     def save_graph(self):
-        """将图谱序列化到磁盘"""
+        """将图谱序列化到磁盘（JSON 格式，避免 pickle 反序列化风险）"""
         if self.graph is None:
             return
         os.makedirs(os.path.dirname(GRAPH_PATH), exist_ok=True)
-        with open(GRAPH_PATH, 'wb') as f:
-            pickle.dump(self.graph, f)
+        data = nx.node_link_data(self.graph)
+        with open(GRAPH_PATH, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, default=str)
         logger.info(f"图谱已保存: {self.graph.number_of_nodes()} 节点, {self.graph.number_of_edges()} 边")
 
     def load_graph(self) -> bool:
-        """从磁盘加载图谱"""
+        """从磁盘加载图谱（JSON 格式）"""
         if os.path.exists(GRAPH_PATH):
             try:
-                with open(GRAPH_PATH, 'rb') as f:
-                    self.graph = pickle.load(f)
+                with open(GRAPH_PATH, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                self.graph = nx.node_link_graph(data)
                 self._last_build_time = datetime.now()
-                # 重建 norm_index
                 self.graph_builder.graph = self.graph
                 self.graph_builder._rebuild_norm_index()
                 logger.info(f"图谱已加载: {self.graph.number_of_nodes()} 节点, {self.graph.number_of_edges()} 边")
@@ -82,7 +84,11 @@ class GraphRAGEngine:
             news_list, total = await self.db_manager.get_latest_news(limit=limit)
             logger.info(f"获取到 {len(news_list)}/{total} 篇新闻用于图谱构建")
 
-            self.graph = self.graph_builder.build_entity_graph(news_list)
+            loop = asyncio.get_running_loop()
+            self.graph = await loop.run_in_executor(
+                None,
+                lambda: self.graph_builder.build_entity_graph(news_list)
+            )
             self._last_build_time = datetime.now()
             self.graph_builder._rebuild_norm_index()
 
@@ -151,8 +157,15 @@ class GraphRAGEngine:
                 aid = article.get('article_id', '')
                 if aid in article_map:
                     article['content_hash'] = article_map[aid]
-                entities = self.graph_builder._extract_entities(article)
-                relationships = self.graph_builder._extract_relationships(article, entities)
+                loop = asyncio.get_running_loop()
+                entities = await loop.run_in_executor(
+                    None,
+                    lambda a=article: self.graph_builder._extract_entities(a)
+                )
+                relationships = await loop.run_in_executor(
+                    None,
+                    lambda a=article, e=entities: self.graph_builder._extract_relationships(a, e)
+                )
                 self.graph_builder._add_to_graph(article, entities, relationships)
             except Exception as e:
                 logger.warning(f"文章实体提取失败: {article.get('title', '')}: {e}")
@@ -191,14 +204,14 @@ class GraphRAGEngine:
                 logger.info("知识图谱不存在，正在构建...")
                 await self.build_knowledge_graph(limit=50)
 
-            relevant_entities = self._find_relevant_entities(question)
+            relevant_entities = await self._find_relevant_entities(question)
             logger.info(f"找到相关实体数量: {len(relevant_entities)}")
 
             context = await self._collect_context(question, relevant_entities,
                                              from_date=from_date, to_date=to_date)
             logger.info(f"收集到上下文长度: {len(context)}")
 
-            result = self._generate_answer(question, context,
+            result = await self._generate_answer(question, context,
                                             from_date=from_date, to_date=to_date)
 
             result.update({
@@ -230,7 +243,7 @@ class GraphRAGEngine:
                 'graph_stats': self.graph_builder.get_graph_statistics() if self.graph else {}
             }
 
-    def _find_relevant_entities(self, question: str) -> List[str]:
+    async def _find_relevant_entities(self, question: str) -> List[str]:
         """在图中查找相关实体"""
         try:
             all_nodes = list(self.graph.nodes()) if self.graph else []
@@ -246,16 +259,18 @@ class GraphRAGEngine:
                 """
 
                 try:
-                    response = self.llm_client.generate_structured(
-                        prompt,
-                        max_tokens=512,
-                        temperature=0.5
+                    loop = asyncio.get_running_loop()
+                    response = await loop.run_in_executor(
+                        None,
+                        lambda: self.llm_client.generate_structured(
+                            prompt, max_tokens=512, temperature=0.5
+                        )
                     )
                     response_text = response.get('choices', [{}])[0].get('message', {}).get('content', '')
                     entities = [e.strip() for e in response_text.split('\n') if e.strip() and len(e.strip()) > 1]
                     return entities[:20]
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"LLM 实体查找失败，使用全节点回退: {e}")
 
             return all_nodes[:20]
 
@@ -283,7 +298,8 @@ class GraphRAGEngine:
                             neighbor_data = self.graph.nodes.get(neighbor, {})
                             entity_context += f"  - 和 '{neighbor}' 的关系: {self.graph.get_edge_data(entity, neighbor, {}).get('relation', '关联')}\n"
                         context_parts.append(entity_context)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"收集实体 '{entity}' 上下文失败: {e}")
                     continue
 
             if self.db_manager and len(relevant_entities) > 0:
@@ -307,7 +323,7 @@ class GraphRAGEngine:
             logger.error(f"收集上下文失败: {e}")
             return "上下文获取失败"
 
-    def _generate_answer(self, question: str, context: str,
+    async def _generate_answer(self, question: str, context: str,
                          from_date: str = None, to_date: str = None) -> Dict[str, Any]:
         """生成最终答案（含时间维度提示）"""
         try:
@@ -321,10 +337,12 @@ class GraphRAGEngine:
 如果问题涉及趋势或变化，请按时间线描述；否则直接回答。回答需要是中文，200 字以内。
             """
 
-            response = self.llm_client.generate_structured(
-                prompt,
-                max_tokens=512,
-                temperature=0.5
+            loop = asyncio.get_running_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.llm_client.generate_structured(
+                    prompt, max_tokens=512, temperature=0.5
+                )
             )
 
             answer = response.get('choices', [{}])[0].get('message', {}).get('content', '').strip()
@@ -397,7 +415,10 @@ class GraphRAGEngine:
 2. 情感走向（正面→负面 or 负面→正面）
 3. 核心结论"""
 
-        summary = self.llm_client.generate_response(prompt, max_tokens=300)
+        summary = await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: self.llm_client.generate_response(prompt, max_tokens=300)
+        )
         return {
             'entity': entity,
             'summary': summary,

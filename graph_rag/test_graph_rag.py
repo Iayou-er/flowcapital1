@@ -12,7 +12,7 @@ from graph_rag.llm_client import CloudLLMClient
 from graph_rag.graph_builder import GraphBuilder
 from graph_rag.rag_engine import GraphRAGEngine
 from graph_rag.config import GraphRAGConfig
-from backend.database.db_manager import db
+from backend.database.db_manager_async import db_async
 
 logging.basicConfig(
     level=logging.INFO,
@@ -93,7 +93,7 @@ def test_rag_engine():
     """测试RAG引擎"""
     logger.info("测试RAG引擎...")
     try:
-        engine = GraphRAGEngine(None, db)
+        engine = GraphRAGEngine(None, db_async)
         info = engine.get_graph_info()
         logger.info(f"图信息测试完成: {info}")
         return True

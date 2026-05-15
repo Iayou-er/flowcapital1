@@ -37,5 +37,5 @@ async def track_event(event: EventModel):
         )
         return {'code': 0}
     except Exception as e:
-        logger.warning(f"埋点写入失败: {e}")
+        logger.warning("埋点写入失败: %s", e)
         return {'code': 0}  # 静默失败，不影响前端

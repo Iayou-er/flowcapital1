@@ -86,7 +86,7 @@ class NewsDeduplicator:
         x = h1 ^ h2
         return bin(x).count('1')
 
-    def is_duplicate_cross_batch(self, text: str, redis_client, db) -> bool:
+    async def is_duplicate_cross_batch(self, text: str, redis_client, db) -> bool:
         """
         与近期（24h内）已入库新闻做 SimHash 比对。
         从 DB 查询最近 500 条新闻的 article_id，再从 Redis 批量获取指纹。
@@ -98,9 +98,9 @@ class NewsDeduplicator:
         if fingerprint == 0:
             return False
 
-        recent_ids = db.get_recent_article_ids(limit=500)
+        recent_ids = await db.get_recent_article_ids(limit=500)
         for aid in recent_ids:
-            fp_str = redis_client.get(f'simhash:{aid}')
+            fp_str = await redis_client.get(f'simhash:{aid}')
             if fp_str and self._hamming_distance(fingerprint, int(fp_str)) <= 3:
                 return True
         return False

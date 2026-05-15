@@ -11,6 +11,7 @@ dist/
 build/
 venv/
 .env
+deploy/api_key.conf
 
 # Node
 economic-news-webapp/node_modules/

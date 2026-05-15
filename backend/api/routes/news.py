@@ -48,13 +48,13 @@ async def get_latest_news(
     """获取最新新闻（支持分页）"""
     try:
         cache_key = f"news:latest:{page}:{limit}"
-        cached = redis_client.get(cache_key)
+        cached = await redis_client.get(cache_key)
         if cached is not None:
             return cached
         offset = (page - 1) * limit
         news, total = await db.get_latest_news(limit=limit, offset=offset, exclude_sources=EXCLUDED_SOURCES)
         result = {"code": 0, "data": news, "count": len(news), "total": total, "page": page}
-        redis_client.set(cache_key, result, ttl=_CACHE_TTL)
+        await redis_client.set(cache_key, result, ttl=_CACHE_TTL)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取新闻失败: {e}")
@@ -99,13 +99,13 @@ async def get_media_news(
     """获取自媒体/公众号板块内容（独立于传统新闻）"""
     try:
         cache_key = f"news:media:{page}:{limit}"
-        cached = redis_client.get(cache_key)
+        cached = await redis_client.get(cache_key)
         if cached is not None:
             return cached
         offset = (page - 1) * limit
         news, total = await db.get_news_by_sources(MEDIA_SOURCES, limit=limit, offset=offset)
         result = {"code": 0, "data": news, "count": len(news), "total": total, "page": page}
-        redis_client.set(cache_key, result, ttl=_CACHE_TTL)
+        await redis_client.set(cache_key, result, ttl=_CACHE_TTL)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取自媒体内容失败: {e}")
@@ -169,14 +169,14 @@ async def search_news(
             if r.get('source', '') not in EXCLUDED_SOURCES
         ]
 
-        return {"code": 0, "data": results, "count": len(results), "total": len(results), "page": page}
+        return {"code": 0, "data": results, "count": len(results), "total": total, "page": page}
     except Exception as e:
         # 降级到传统 LIKE 搜索
         try:
             offset = (page - 1) * limit
             results, total = await db.search_news(keyword=query, limit=limit, offset=offset)
             results = [r for r in results if r.get('source', '') not in EXCLUDED_SOURCES]
-            return {"code": 0, "data": results, "count": len(results), "total": len(results), "page": page, "fallback": True}
+            return {"code": 0, "data": results, "count": len(results), "total": total, "page": page, "fallback": True}
         except Exception as fallback_err:
             logger.warning(f"Whoosh 搜索和 fallback LIKE 均失败: {e}, fallback: {fallback_err}")
             raise HTTPException(status_code=500, detail="搜索服务不可用")
@@ -201,13 +201,13 @@ async def get_news_by_category(
     """按分类获取新闻（支持分页）"""
     try:
         cache_key = f"news:category:{category}:{page}:{limit}"
-        cached = redis_client.get(cache_key)
+        cached = await redis_client.get(cache_key)
         if cached is not None:
             return cached
         offset = (page - 1) * limit
         news, total = await db.get_news_by_category(category=category, limit=limit, offset=offset, exclude_sources=EXCLUDED_SOURCES)
         result = {"code": 0, "data": news, "count": len(news), "total": total, "page": page}
-        redis_client.set(cache_key, result, ttl=_CACHE_TTL)
+        await redis_client.set(cache_key, result, ttl=_CACHE_TTL)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取分类新闻失败: {e}")
@@ -244,15 +244,12 @@ async def translate_news(
 
         detected = translator.detect_language(news.get('title', ''))
 
-        # 并行翻译 title/summary/content
-        from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            f_title = pool.submit(translator.translate, news.get('title', ''), source_lang, target_lang)
-            f_summary = pool.submit(translator.translate, news.get('summary', ''), source_lang, target_lang)
-            f_content = pool.submit(translator.translate, news.get('content', ''), source_lang, target_lang)
-            title_translated = f_title.result(timeout=15)
-            summary_translated = f_summary.result(timeout=15)
-            content_translated = f_content.result(timeout=15)
+        # 并行翻译 title/summary/content（不阻塞事件循环）
+        title_translated, summary_translated, content_translated = await asyncio.gather(
+            asyncio.to_thread(translator.translate, news.get('title', ''), source_lang, target_lang),
+            asyncio.to_thread(translator.translate, news.get('summary', ''), source_lang, target_lang),
+            asyncio.to_thread(translator.translate, news.get('content', ''), source_lang, target_lang),
+        )
 
         return {
             "code": 0,
@@ -281,9 +278,12 @@ async def translate_news(
 @news_router.post("/translate", dependencies=[Depends(verify_api_key)])
 async def translate_text(request: TranslateTextRequest):
     """通用文本翻译接口"""
+    import asyncio
     try:
         translator = get_translator()
-        result = translator.auto_translate(request.text, target_lang=request.target_lang)
+        result = await asyncio.to_thread(
+            translator.auto_translate, request.text, target_lang=request.target_lang
+        )
         return {"code": 0, "data": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"翻译失败: {e}")

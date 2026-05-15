@@ -45,18 +45,17 @@ from backend.analyzer.sentiment import SentimentAnalyzer, HAS_SNOWNLP
 from backend.analyzer.dedup import NewsDeduplicator
 
 # Prometheus 指标（scheduler 单进程，不设 PROMETHEUS_MULTIPROC_DIR）
-import os as _os
-if "PROMETHEUS_MULTIPROC_DIR" in _os.environ:
+if "PROMETHEUS_MULTIPROC_DIR" in os.environ:
     logger.warning("scheduler 检测到 PROMETHEUS_MULTIPROC_DIR，已忽略")
-    del _os.environ["PROMETHEUS_MULTIPROC_DIR"]
+    del os.environ["PROMETHEUS_MULTIPROC_DIR"]
 
 from backend.monitoring.metrics import (
     use_registry, CRAWL_ARTICLES, CRAWL_ERRORS, LLM_CALLS,
     DEDUP_RATIO, SEARCH_INDEX_LAG, HOTNESS_ARTICLES_TOTAL,
 )
-from prometheus_client import push_to_gateway
-
-PUSHGATEWAY_URL = _os.getenv("PUSHGATEWAY_URL", "localhost:9091")
+from hotness import update_hotness_scores as _update_hotness
+from metrics_push import push_metrics
+from sync_task import incremental_sync, check_index_consistency as _check_index
 
 # 模块级单例，避免每次调度重复创建
 _crawler = NewsCrawler(delay=0.1)
@@ -102,14 +101,6 @@ async def _incremental_update_with_limit(article_dicts):
     _DAILY_LLM_CALLS += count * 2
 
 
-def _push_scheduler_metrics():
-    """推送 scheduler 指标到 Pushgateway"""
-    try:
-        push_to_gateway(PUSHGATEWAY_URL, job="flowcapital-scheduler", registry=use_registry)
-    except Exception as e:
-        logger.warning(f"Pushgateway 推送失败: {e}")
-
-
 async def crawl_and_analyze_news():
     """爬取和分析新闻的主任务 — 每 15 分钟执行一次"""
     global _crawl_running
@@ -122,7 +113,7 @@ async def crawl_and_analyze_news():
 
         # 1. 爬取最新新闻
         logger.info("正在爬取最新经济新闻...")
-        news_list = _crawler.crawl_latest_news(limit=60)
+        news_list = await asyncio.to_thread(_crawler.crawl_latest_news, limit=60)
 
         if not news_list:
             logger.warning("未获取到新闻数据")
@@ -142,7 +133,7 @@ async def crawl_and_analyze_news():
         # 1.5.1 SimHash 批次内去重
         deduplicator = NewsDeduplicator(threshold=4)
         before_batch = len(news_list)
-        news_list = deduplicator.deduplicate(news_list)
+        news_list = await asyncio.to_thread(deduplicator.deduplicate, news_list)
         batch_deduped = before_batch - len(news_list)
 
         # 1.5.2 URL 批次内去重（同批次中相同 URL 只保留一条）
@@ -166,7 +157,7 @@ async def crawl_and_analyze_news():
             url = news.get('url', '')
             if url:
                 filtered.append(news)
-            elif not deduplicator.is_duplicate_cross_batch(
+            elif not await deduplicator.is_duplicate_cross_batch(
                 news.get('title', '') + ' ' + (news.get('content', '') or news.get('summary', '')),
                 redis_client, db
             ):
@@ -229,7 +220,7 @@ async def crawl_and_analyze_news():
                     else:
                         aid = hashlib.md5(news.get('title', '').encode()).hexdigest()[:16]
                     fp = deduplicator._compute_fingerprint(text)
-                    redis_client.set(f'simhash:{aid}', str(fp), ttl=86400)
+                    await redis_client.set(f'simhash:{aid}', str(fp), ttl=86400)
 
             # 同步更新全文搜索索引（批量写入）
             try:
@@ -273,9 +264,11 @@ async def crawl_and_analyze_news():
             positive_count = negative_count = neutral_count = 0
 
             unresolved = []
+            # 批量查询已有分析结果，避免 N+1
+            all_aids = [nd['article_id'] for nd in news_dicts]
+            existing_map = await db.get_analysis_by_article_ids(all_aids)
             for nd in news_dicts:
-                existing = await db.get_analysis_by_article_id(nd['article_id'])
-                if not existing:
+                if nd['article_id'] not in existing_map:
                     unresolved.append(nd)
 
             if unresolved:
@@ -332,11 +325,11 @@ async def crawl_and_analyze_news():
                 for limit in [12, 24]:
                     news, total = await db.get_latest_news(limit=limit, offset=(page-1)*limit,
                                                      exclude_sources=EXCLUDED_SOURCES)
-                    redis_client.set(f'news:latest:{page}:{limit}',
+                    await redis_client.set(f'news:latest:{page}:{limit}',
                                      {'code': 0, 'data': news, 'count': len(news), 'total': total, 'page': page},
                                      ttl=900)
                     mnews, mtotal = await db.get_news_by_sources(MEDIA_SOURCES, limit=limit, offset=(page-1)*limit)
-                    redis_client.set(f'news:media:{page}:{limit}',
+                    await redis_client.set(f'news:media:{page}:{limit}',
                                      {'code': 0, 'data': mnews, 'count': len(mnews), 'total': mtotal, 'page': page},
                                      ttl=900)
             logger.info("缓存预热完成（直接写 Redis）")
@@ -375,7 +368,7 @@ async def crawl_and_analyze_news():
         except Exception as e:
             logger.warning(f"图谱增量更新失败: {e}")
 
-        _push_scheduler_metrics()
+        push_metrics(use_registry)
         logger.info("新闻爬取和分析任务执行完成")
 
     except Exception as e:
@@ -385,96 +378,13 @@ async def crawl_and_analyze_news():
 
 
 async def check_search_index_consistency():
-    """
-    全量对比 DB 和 Whoosh 索引的 article_id 差异，修复缺失条目。
-    """
-    from backend.analyzer.search_engine import _get_index, add_documents_batch
-
-    idx = await asyncio.to_thread(_get_index)
-    reader = idx.reader()
-    indexed_ids = set(r['article_id'] for r in reader.all_stored_fields() if r.get('article_id'))
-    reader.close()
-
-    db_ids = set(await db.get_recent_article_ids(limit=10000))
-
-    missing = db_ids - indexed_ids
-    SEARCH_INDEX_LAG.set(len(missing))
-    if not missing:
-        logger.info("搜索索引全量一致性检查通过")
-        return
-
-    logger.warning(f"搜索索引缺失 {len(missing)} 条，开始修复...")
-    articles = await db.get_news_by_article_ids(list(missing))
-    docs = [
-        {
-            'article_id': a['article_id'],
-            'title': a.get('title', ''),
-            'content': a.get('content', ''),
-            'summary': a.get('summary', ''),
-            'source': a.get('source', ''),
-            'category': a.get('category', ''),
-            'published_at': a.get('published_at', ''),
-        }
-        for a in articles
-    ]
-    count = await asyncio.to_thread(add_documents_batch, docs)
-    logger.info(f"索引修复完成: {count} 条")
+    """全量对比 DB 和 Whoosh 索引的 article_id 差异，修复缺失条目。"""
+    await _check_index(db, SEARCH_INDEX_LAG)
 
 
 async def update_hotness_scores():
     """聚合过去 24h 事件，计算热度分（含时间衰减 + 防刷去重）"""
-    events = await db.get_recent_events(hours=24)
-    now = datetime.now()
-
-    # 按 (client_id, article_id, event_type) 去重 → 每用户每文章每事件类型只计一次
-    seen = set()
-    raw_scores = {}
-    for e in events:
-        aid = e['article_id']
-        if not aid:
-            continue
-
-        dedup_key = (e['client_id'], aid, e['event_type'])
-        if dedup_key in seen:
-            continue
-        seen.add(dedup_key)
-
-        if aid not in raw_scores:
-            raw_scores[aid] = 0
-
-        # 时间衰减因子：e^{-hours_passed / 24}
-        try:
-            event_time = datetime.fromisoformat(e['created_at'])
-            hours_passed = (now - event_time).total_seconds() / 3600
-        except (ValueError, TypeError):
-            hours_passed = 24
-        import math
-        decay = max(0.1, math.e ** (-hours_passed / 24))
-
-        payload = json.loads(e['payload']) if e['payload'] else {}
-
-        if e['event_type'] == 'article_click':
-            raw_scores[aid] += 1 * decay
-        elif e['event_type'] == 'article_view':
-            duration = payload.get('duration_ms', 0)
-            raw_scores[aid] += min(duration / 10000, 3) * decay
-        elif e['event_type'] == 'search_click':
-            raw_scores[aid] += 2 * decay
-
-    # 先归零，再写入新值
-    await db.reset_all_hotness_scores()
-    await db.update_hotness_scores(raw_scores)
-
-    if raw_scores:
-        logger.info(f"热度分更新完成: {len(raw_scores)} 篇文章")
-
-    HOTNESS_ARTICLES_TOTAL.set(len(raw_scores))
-
-    # 清理 7 天前的旧事件
-    await db.execute_write(
-        'DELETE FROM event_log WHERE created_at < :cutoff',
-        {"cutoff": (datetime.now() - timedelta(days=7)).isoformat()}
-    )
+    await _update_hotness(db, HOTNESS_ARTICLES_TOTAL)
 
 
 async def full_analysis():
@@ -507,12 +417,14 @@ async def full_analysis():
         analyzed_count = 0
 
         unresolved = []
+        # 批量查询已有分析结果，避免 N+1
+        all_aids = [news.get('article_id') for news in news_list if news.get('article_id')]
+        existing_map = await db.get_analysis_by_article_ids(all_aids)
         for news in news_list:
             aid = news.get('article_id')
             if not aid:
                 continue
-            existing = await db.get_analysis_by_article_id(aid)
-            if not existing:
+            if aid not in existing_map:
                 unresolved.append(news)
 
         if unresolved:

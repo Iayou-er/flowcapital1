@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Query, Depends, Request
 from pydantic import BaseModel, Field, field_validator
 from backend.database.db_manager_async import db_async as db
 from backend.database.redis_client import redis_client
-from backend.api.auth import verify_api_key
+from backend.api.auth import verify_api_key, verify_csrf
 
 try:
     import nh3
@@ -24,42 +24,48 @@ guest_book_router = APIRouter(prefix="/guest", tags=["留言板"])
 
 # Session 存储：{session_token: {anonymous_id, created_at}}
 # 优先使用 Redis，降级使用内存
+import asyncio
 _SESSION_PREFIX = "guest_session:"
 _SESSION_TTL = 86400  # 24 小时
 _mem_sessions: dict = {}  # 内存降级存储
+_mem_sessions_lock = asyncio.Lock()
 
 
 def _session_key(token: str) -> str:
     return f"{_SESSION_PREFIX}{token}"
 
 
-def _create_session(anonymous_id: str) -> str:
+async def _create_session(anonymous_id: str) -> str:
     """创建会话并返回 session_token"""
     token = uuid.uuid4().hex
     data = {"anonymous_id": anonymous_id, "created_at": time.time()}
     redis_key = _session_key(token)
     try:
-        if redis_client.is_available():
+        if await redis_client.is_available():
             import json
-            redis_client.set(redis_key, data, ttl=_SESSION_TTL)
+            await redis_client.set(redis_key, data, ttl=_SESSION_TTL)
         else:
-            _mem_sessions[token] = data
+            async with _mem_sessions_lock:
+                _mem_sessions[token] = data
     except Exception:
-        _mem_sessions[token] = data
+        async with _mem_sessions_lock:
+            _mem_sessions[token] = data
     return token
 
 
-def _resolve_session(token: str) -> str | None:
+async def _resolve_session(token: str) -> str | None:
     """从 session 解析 anonymous_id，无效返回 None"""
     try:
         redis_key = _session_key(token)
-        if redis_client.is_available():
-            data = redis_client.get(redis_key)
+        if await redis_client.is_available():
+            data = await redis_client.get(redis_key)
             if data:
                 return data.get("anonymous_id") if isinstance(data, dict) else None
-        return _mem_sessions.get(token, {}).get("anonymous_id")
+        async with _mem_sessions_lock:
+            return _mem_sessions.get(token, {}).get("anonymous_id")
     except Exception:
-        return _mem_sessions.get(token, {}).get("anonymous_id")
+        async with _mem_sessions_lock:
+            return _mem_sessions.get(token, {}).get("anonymous_id")
 
 
 def _sanitize_text(text: str) -> str:
@@ -98,7 +104,7 @@ async def assign_anonymous_id():
         raise HTTPException(status_code=500, detail="分配匿名ID失败")
 
 
-@guest_book_router.post("/login")
+@guest_book_router.post("/login", dependencies=[Depends(verify_csrf)])
 async def guest_login(request: GuestLoginRequest):
     """客户端确认登录，创建 Session 并返回 session_token"""
     try:
@@ -106,7 +112,7 @@ async def guest_login(request: GuestLoginRequest):
         if not re.match(r'^匿名用户 \d{6}$', request.anonymous_id):
             raise HTTPException(status_code=400, detail="匿名ID格式不正确")
 
-        token = _create_session(request.anonymous_id)
+        token = await _create_session(request.anonymous_id)
         return {"code": 0, "data": {"session_token": token}}
     except HTTPException:
         raise
@@ -121,7 +127,7 @@ async def post_message(request: GuestMessageRequest):
         raise HTTPException(status_code=400, detail="留言内容不能为空")
 
     # 从 session 解析 anonymous_id，防止 ID 伪造
-    anonymous_id = _resolve_session(request.session_token)
+    anonymous_id = await _resolve_session(request.session_token)
     if not anonymous_id:
         raise HTTPException(status_code=401, detail="会话已过期，请重新登录")
 

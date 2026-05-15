@@ -75,15 +75,19 @@ _lock = threading.Lock()
 
 def _get_index() -> Index:
     global _index
-    os.makedirs(INDEX_DIR, exist_ok=True)
-    # Whoosh 索引标识：目录下存在 _MAIN_*.toc 文件
-    toc_files = [f for f in os.listdir(INDEX_DIR) if f.startswith('_MAIN_') and f.endswith('.toc')]
-    if toc_files:
-        _index = open_dir(INDEX_DIR)
-    else:
-        _index = create_in(INDEX_DIR, _schema)
-        logger.info("Whoosh 索引已创建")
-    return _index
+    if _index is not None:
+        return _index
+    with _lock:
+        if _index is not None:
+            return _index
+        os.makedirs(INDEX_DIR, exist_ok=True)
+        toc_files = [f for f in os.listdir(INDEX_DIR) if f.startswith('_MAIN_') and f.endswith('.toc')]
+        if toc_files:
+            _index = open_dir(INDEX_DIR)
+        else:
+            _index = create_in(INDEX_DIR, _schema)
+            logger.info("Whoosh 索引已创建")
+        return _index
 
 
 def rebuild_index(news_list: List[Dict]) -> int:
@@ -237,18 +241,17 @@ def search(
         logger.warning(f"查询解析失败: {e}")
         return [], 0
 
-    # 分类/来源过滤
-    filter_terms = []
+    # 分类/来源过滤（作为查询条件 AND 组合）
+    from whoosh.query import And, Term
     if category:
-        filter_terms.append(('category', category))
+        q = And([q, Term('category', category)])
     if source:
-        filter_terms.append(('source', source))
+        q = And([q, Term('source', source)])
 
     with idx.searcher() as searcher:
-        results = searcher.search(q, limit=page * limit, filter=filter_terms if filter_terms else None)
-
+        results = searcher.search(q, limit=page * limit)
+        total = results.estimated_length()
         article_ids = [r['article_id'] for r in results]
-        total = len(results)
 
     # 分页
     offset = (page - 1) * limit
@@ -340,8 +343,8 @@ async def search_async(
     if _check_pg():
         try:
             return await search_pg(query, page, limit, category, source)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"PG 搜索失败，降级到 Whoosh: {e}")
     # 同步 Whoosh 搜索（在专用线程池中执行，避免阻塞事件循环）
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(_whoosh_executor, search, query, page, limit, category, source)

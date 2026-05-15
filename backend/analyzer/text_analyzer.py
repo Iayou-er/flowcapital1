@@ -245,7 +245,7 @@ class TextAnalyzer:
     # ── P1: 实体识别 ──
 
     # 财经实体词典（沪深300+知名企业+经济术语）
-    _FINANCE_ENTITIES = {
+    _FINANCE_COMPANIES = {
         '阿里巴巴', '腾讯', '华为', '京东', '美团', '比亚迪', '宁德时代',
         '贵州茅台', '工商银行', '建设银行', '农业银行', '中国银行', '招商银行',
         '中国平安', '中国人寿', '中信证券', '海通证券', '华泰证券',
@@ -254,9 +254,13 @@ class TextAnalyzer:
         '中芯国际', '寒武纪', '海光信息', '龙芯中科', '华为海思',
         '药明康德', '恒瑞医药', '迈瑞医疗', '百济神州',
         '隆基绿能', '通威股份', '阳光电源', '天合光能',
-        '宁德', '比亚迪', '蔚来', '理想', '小鹏', '特斯拉',
+        '宁德', '蔚来', '理想', '小鹏', '特斯拉',
+    }
+    _FINANCE_ORGANIZATIONS = {
         '央行', '证监会', '银保监会', '财政部', '发改委', '统计局',
         '美联储', '欧央行', '日央行', 'IMF', '世界银行',
+    }
+    _FINANCE_INDICATORS = {
         '沪深300', '上证指数', '深证成指', '创业板指', '科创50',
         'GDP', 'CPI', 'PPI', 'PMI', 'LPR', 'MLF', 'OMO',
     }
@@ -284,8 +288,14 @@ class TextAnalyzer:
             if len(word) < 2:
                 continue
             # 词典匹配
-            if word in self._FINANCE_ENTITIES:
+            if word in self._FINANCE_COMPANIES:
                 companies.add(word)
+                continue
+            if word in self._FINANCE_ORGANIZATIONS:
+                organizations.add(word)
+                continue
+            if word in self._FINANCE_INDICATORS:
+                indicators.add(word)
                 continue
             # 词性分类
             if flag.startswith('nr'):

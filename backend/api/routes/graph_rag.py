@@ -64,7 +64,7 @@ class GraphInfoResponse(BaseModel):
 
 # 路由实现
 @graph_rag_router.post("/query")
-async def query_graph_rag(request: GraphQueryRequest):
+async def query_graph_rag(request: GraphQueryRequest, api_key: str = Depends(verify_api_key)):
     """使用GraphRAG进行查询"""
     engine = get_graph_rag_engine()
     if not engine:
@@ -107,7 +107,7 @@ async def build_knowledge_graph(
 
 
 @graph_rag_router.get("/info")
-async def get_graph_info():
+async def get_graph_info(api_key: str = Depends(verify_api_key)):
     """获取知识图谱信息"""
     engine = get_graph_rag_engine()
     if not engine:
@@ -140,7 +140,7 @@ class EntityTimelineRequest(BaseModel):
 
 
 @graph_rag_router.post("/entity-timeline")
-async def entity_timeline(request: EntityTimelineRequest):
+async def entity_timeline(request: EntityTimelineRequest, api_key: str = Depends(verify_api_key)):
     """获取实体时间线摘要"""
     engine = get_graph_rag_engine()
     if not engine:
@@ -156,7 +156,7 @@ async def entity_timeline(request: EntityTimelineRequest):
 
 
 @graph_rag_router.post("/query-test")
-async def query_test():
+async def query_test(api_key: str = Depends(verify_api_key)):
     """简单测试接口"""
     return {
         "code": 0,

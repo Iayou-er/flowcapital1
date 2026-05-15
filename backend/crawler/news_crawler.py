@@ -3,7 +3,6 @@
 多数据源并行聚合: AKShare(东财) + 东方财富网页 + 新浪财经 + 金十数据 + 东方财富公告
 + 华尔街见闻 + 网易财经 + 第一财经 + 同花顺 + RSS源(新华网/财新/经济日报) + API源(同花顺/财联社/百度)
 """
-
 import hashlib
 import json
 import time
@@ -22,6 +21,15 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
 import feedparser
+
+from .config import (
+    CATEGORY_PATTERNS, DOMAIN_SELECTORS, GENERIC_SELECTORS,
+    SKIP_PATTERN, ARTICLE_CLASS_PATTERN, ARTICLE_ID_PATTERN, ARTICLE_CLASS_SIMPLE,
+)
+from .circuit import CircuitBreaker
+from .browser import get_page as _ensure_playwright_context, reset_browser as _reset_playwright
+from .pipeline import extract_article as _extract_article
+from .utils import classify as _classify, normalize_pubdate as _normalize_pubdate, make_article, sort_by_quality as _sort_by_quality
 
 logger = logging.getLogger(__name__)
 
@@ -204,8 +212,8 @@ def _clean_content(tag) -> str:
             try:
                 if hasattr(child, 'name'):
                     _walk(child, depth + 1)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"遍历子元素失败: {e}")
 
     _walk(tag)
 
@@ -249,8 +257,8 @@ def _extract_article(url: str, session: requests.Session, timeout: int = 10) -> 
         domain = ''
         try:
             domain = urlparse(url).netloc
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"解析域名失败: {e}")
 
         selectors = []
         for site_domain, site_selectors in DOMAIN_SELECTORS.items():
@@ -332,13 +340,13 @@ def _normalize_pubdate(raw: str) -> str:
     if raw.isdigit():
         try:
             return datetime.fromtimestamp(int(raw)).isoformat()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Unix时间戳解析失败: {e}")
     # RFC-2822 / RSS pubDate 格式
     try:
         return parsedate_to_datetime(raw).isoformat()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"RFC日期解析失败: {e}")
     # 最后尝试标准 strptime
     for fmt in ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d', '%Y/%m/%d %H:%M:%S', '%m/%d/%Y %H:%M:%S']:
         try:
@@ -363,33 +371,33 @@ def _ensure_playwright_context():
         try:
             if _pw_browser.is_connected():
                 return _pw_context
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Playwright连接检查失败: {e}")
 
     with _pw_lock:
         if _pw_browser is not None and _pw_context is not None:
             try:
                 if _pw_browser.is_connected():
                     return _pw_context
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Playwright连接检查(锁定)失败: {e}")
 
         # 清理旧实例
         try:
             if _pw_context:
                 _pw_context.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"关闭旧Playwright context失败: {e}")
         try:
             if _pw_browser:
                 _pw_browser.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"关闭旧Playwright browser失败: {e}")
         try:
             if _pw_playwright:
                 _pw_playwright.stop()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"关闭旧Playwright实例失败: {e}")
 
         # 创建新实例
         from playwright.sync_api import sync_playwright
@@ -411,18 +419,18 @@ def _reset_playwright():
         try:
             if _pw_context:
                 _pw_context.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"重置时关闭Playwright context失败: {e}")
         try:
             if _pw_browser:
                 _pw_browser.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"重置时关闭Playwright browser失败: {e}")
         try:
             if _pw_playwright:
                 _pw_playwright.stop()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"重置时关闭Playwright实例失败: {e}")
         _pw_context = None
         _pw_browser = None
         _pw_playwright = None
@@ -498,94 +506,17 @@ class NewsCrawler:
 
     # ── 公开接口 ──
 
+    def close(self):
+        """关闭 HTTP 会话，释放连接池"""
+        if self.session:
+            self.session.close()
+            self.session = None
+
     def crawl_latest_news(self, limit: int = 50) -> List[Dict]:
         """获取最新经济新闻（全源并行 + 更高单源配额）"""
-        _t0 = time.time()
-        logger.info(f"开始获取最新经济新闻，目标数量: {limit}")
-
-        all_news = []
-        seen_urls = set()
-
-        # 全源统一并行（不再分快慢先后）
-        all_sources = [
-            # 快速 API/RSS 源
-            ('金十数据', self._fetch_jinshi, True),
-            ('华尔街见闻', self._fetch_wallstreetcn, True),
-            ('同花顺API', self._fetch_ths_api, True),
-            ('财联社API', self._fetch_cls_api, True),
-            ('雪球', self._fetch_xueqiu, True),
-            ('东方财富公告', self._fetch_eastmoney_api, True),
-            ('RSS(新华网)', self._fetch_rss_xinhua, True),
-            ('RSS(财新)', self._fetch_rss_caixin, True),
-            ('RSS(经济日报)', self._fetch_rss_ce, True),
-            ('RSS(虎嗅)', self._fetch_rss_huxiu, True),
-            ('RSS(少数派)', self._fetch_rss_sspai, True),
-            ('RSS(观察者网)', self._fetch_rss_guancha, True),
-            ('36氪', self._fetch_36kr, True),
-            ('AKShare(东财)', self._fetch_akshare, True),
-            # 慢速网页/Playwright 源
-            ('东方财富网页', self._fetch_eastmoney_web, False),
-            ('新浪财经', self._fetch_sina_finance, False),
-            ('微信公众号', self._fetch_wechat_sogou, False),
-            ('钛媒体', self._fetch_tmtpost, False),
-            ('财新网', self._fetch_caixin, False),
-            ('界面新闻', self._fetch_jiemian, False),
-            ('网易财经', self._fetch_netease_finance, False),
-            ('第一财经', self._fetch_yicai, False),
-            ('同花顺', self._fetch_10jqka, False),
-            ('百度财经API', self._fetch_baidu_finance, False),
-        ]
-
-        # 单源配额：快速源每条更多，慢速源适当控制避免超时
-        per_fast = max(limit // 4, 15)
-        per_slow = max(limit // 6, 8)
-        total_workers = min(len(all_sources), 12)
-
-        with ThreadPoolExecutor(max_workers=total_workers) as executor:
-            future_map = {}
-            for name, func, is_fast in all_sources:
-                per_src = per_fast if is_fast else per_slow
-                future_map[executor.submit(self._fetch_with_cb, name, func, per_src)] = (name, is_fast)
-
-            # as_completed 带全局超时（180s），防止线程死锁导致调度器永久挂起
-            completed = []
-            try:
-                for f in as_completed(future_map, timeout=180):
-                    completed.append(f)
-            except TimeoutError:
-                logger.warning(f"爬取全局超时(180s)，{len(future_map)-len(completed)}/{len(future_map)} 源未完成")
-                for f in future_map:
-                    f.cancel()
-                # 追加已完成的（done+cancelled 但有结果的）
-                for f in future_map:
-                    if f not in completed and (f.done() or f.cancelled()):
-                        completed.append(f)
-
-            for future in completed:
-                name, is_fast = future_map.get(future, ('unknown', False))
-                if name == 'unknown':
-                    continue
-                tag = '快速' if is_fast else '慢速'
-                try:
-                    news = future.result(timeout=0)  # 已完成的不需要等待
-                    if news:
-                        for item in news:
-                            url = item.get('url', '')
-                            if url and url not in seen_urls:
-                                seen_urls.add(url)
-                                all_news.append(item)
-                        logger.info(f"  [{tag}] {name}: {len(news)} 条，累计 {len(all_news)} 条")
-                except Exception as e:
-                    logger.warning(f"  [{tag}] {name} 失败: {e}")
-
-        elapsed = time.time() - _t0
-        if not all_news:
-            logger.warning("所有真实数据源均无返回")
-        else:
-            all_news = self._sort_by_quality(all_news)
-
-        logger.info(f"成功获取 {len(all_news)} 条新闻（{len(seen_urls)} 不重复），耗时 {elapsed:.0f}s")
-        return all_news[:limit]
+        from .orchestrator import CrawlOrchestrator
+        orchestrator = CrawlOrchestrator(crawler=self)
+        return orchestrator.run(limit=limit)
 
     def crawl_news_by_keyword(self, keyword: str, limit: int = 50) -> List[Dict]:
         news = self.crawl_latest_news(limit * 2)
@@ -648,8 +579,8 @@ class NewsCrawler:
                     dt = datetime.strptime(pub[:19], '%Y-%m-%d %H:%M:%S')
                 if start_time <= dt <= end_time:
                     filtered.append(n)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"时间范围过滤解析失败: {e}")
             if len(filtered) >= limit:
                 break
         return filtered
@@ -662,11 +593,11 @@ class NewsCrawler:
     def _fetch_with_cb(self, name: str, fetch_func: Callable, limit: int) -> List[Dict]:
         """带断路器保护的 fetch"""
         if self._circuit_breaker.is_open(name):
-            logger.info(f"  [断路器] {name} 已熔断，跳过本次")
+            logger.info("  [断路器] %s 已熔断，跳过本次", name)
             return []
         try:
             result = fetch_func(limit)
-            if result:
+            if result or isinstance(result, list):
                 self._circuit_breaker.record_success(name)
             else:
                 self._circuit_breaker.record_failure(name)
@@ -732,15 +663,19 @@ class NewsCrawler:
                 for title, url in articles
             }
             # as_completed 带超时，防止单篇文章挂死
+            completed_futures = set()
             try:
-                completed = as_completed(future_to_info, timeout=60)
+                for future in as_completed(future_to_info, timeout=60):
+                    completed_futures.add(future)
             except TimeoutError:
-                completed = as_completed(future_to_info, timeout=1)
+                pass  # 超时的 future 在下面跳过
 
-            for future in completed:
+            for future in future_to_info:
+                if future not in completed_futures:
+                    continue
                 title, article_url = future_to_info[future]
                 try:
-                    content = future.result(timeout=15)
+                    content = future.result(timeout=0)
                     if not content or len(content) < 30:
                         continue
                     cn_count = sum(1 for c in content if '\u4e00' <= c <= '\u9fff')
@@ -750,8 +685,8 @@ class NewsCrawler:
                     if valid_ratio < 0.7:
                         continue
                     results.append(self._make_article(title[:200], content[:8000], article_url, source_name))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"提取文章内容失败: {e}", exc_info=True)
                 if len(results) >= limit:
                     break
         return results[:limit]
@@ -1025,7 +960,7 @@ class NewsCrawler:
         return self._fetch_rss_feed('https://www.chinanews.com/rss/finance.xml', '中新网财经', limit)
 
     def _fetch_rss_caixin(self, limit: int) -> List[Dict]:
-        return self._fetch_rss_feed('https://rsshub.rssforever.com/cls/telegraph', '财联社RSS', limit)
+        return self._fetch_rss_feed('https://rsshub.app/caixin/latest', '财新RSS', limit)
 
     def _fetch_rss_ce(self, limit: int) -> List[Dict]:
         return self._fetch_rss_feed('https://rsshub.rssforever.com/wallstreetcn/live', '华尔街见闻RSS', limit)
@@ -1048,13 +983,13 @@ class NewsCrawler:
                 if hasattr(entry, 'published_parsed') and entry.published_parsed:
                     try:
                         pub = datetime(*entry.published_parsed[:6]).isoformat()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"RSS published_parsed 转换失败: {e}")
                 if not pub and hasattr(entry, 'updated_parsed') and entry.updated_parsed:
                     try:
                         pub = datetime(*entry.updated_parsed[:6]).isoformat()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"RSS updated_parsed 转换失败: {e}")
                 if not pub:
                     raw_pub = ''
                     if hasattr(entry, 'published'):
@@ -1169,8 +1104,8 @@ class NewsCrawler:
                                 results.append(self._make_article(content[:200], content[:8000], article_url, '财联社'))
                                 if len(results) >= limit:
                                     break
-                        except json.JSONDecodeError:
-                            pass
+                        except json.JSONDecodeError as e:
+                            logger.debug(f"财联社JSON解析失败: {e}")
                 if results:
                     break
             return results[:limit]
@@ -1292,16 +1227,16 @@ class NewsCrawler:
                                         title[:200], content[:8000],
                                         final_url, '微信公众号',
                                     ))
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.warning(f"微信公众号提取失败: {e}", exc_info=True)
                     except Exception as e:
                         logger.warning(f"搜狗 q={query} p={page_num}: {e}")
                     finally:
                         if search_page:
                             try:
                                 search_page.close()
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.debug(f"关闭搜狗搜索页失败: {e}")
 
             return results[:actual_limit]
         except Exception as e:

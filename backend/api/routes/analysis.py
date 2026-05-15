@@ -9,7 +9,7 @@ from backend.database.db_manager_async import db_async as db
 from backend.database.redis_client import redis_client
 from backend.analyzer.sentiment import SentimentAnalyzer
 from backend.analyzer.text_analyzer import TextAnalyzer
-from backend.api.routes.news import MEDIA_SOURCES
+from backend.api.routes.news import EXCLUDED_SOURCES
 
 analysis_router = APIRouter(prefix="/analysis", tags=["分析"])
 
@@ -81,7 +81,7 @@ async def analyze_news(
     try:
         # 缓存 key
         cache_key = f"{_CACHE_PREFIX}{time_range}:{start_date}:{end_date}"
-        cached = redis_client.get(cache_key)
+        cached = await redis_client.get(cache_key)
         if cached is not None:
             return cached
 
@@ -93,7 +93,7 @@ async def analyze_news(
             news_list = await db.get_news_by_date_range(boundary, '2099-12-31')
 
         # 排除自媒体源
-        news_list = [n for n in news_list if n.get('source', '') not in MEDIA_SOURCES]
+        news_list = [n for n in news_list if n.get('source', '') not in EXCLUDED_SOURCES]
 
         if not news_list:
             result = {"code": 0, "data": {
@@ -109,7 +109,7 @@ async def analyze_news(
                     "positiveCount": 0, "negativeCount": 0, "neutralCount": 0,
                 }
             }}
-            redis_client.set(cache_key, result, ttl=_CACHE_TTL)
+            await redis_client.set(cache_key, result, ttl=_CACHE_TTL)
             return result
 
         # ── 步骤1：优先从预计算结果读取，缺失的才并行计算 ──
@@ -132,19 +132,19 @@ async def analyze_news(
         # 仅对缺失的新闻并行计算 sentiment + keywords + summary
         if missing_articles:
             import json
-            from concurrent.futures import ThreadPoolExecutor, as_completed
+            import asyncio as _asyncio
             from backend.analyzer.text_analyzer import TextAnalyzer
             sentiment = _get_sentiment()
             text_analyzer = TextAnalyzer()
 
-            def _analyze_one(news):
+            async def _analyze_one(news):
                 content = news.get('content', '') or news.get('summary', '')
                 text = (news.get('title', '') + ' ' + content[:200])
                 if not text.strip():
                     return None
-                s_result = sentiment.analyze_sentiment(text)
-                keywords = text_analyzer.extract_keywords(content, 8)
-                summary = text_analyzer.generate_summary(content, max_sentences=3)
+                s_result = await _asyncio.to_thread(sentiment.analyze_sentiment, text)
+                keywords = await _asyncio.to_thread(text_analyzer.extract_keywords, content, 8)
+                summary = await _asyncio.to_thread(text_analyzer.generate_summary, content, 3)
                 return {
                     'score': s_result['sentiment_score'],
                     'label': s_result['sentiment_label'],
@@ -153,29 +153,24 @@ async def analyze_news(
                     'raw': json.dumps(s_result, ensure_ascii=False),
                 }
 
-            with ThreadPoolExecutor(max_workers=4) as executor:
-                futures = {executor.submit(_analyze_one, news): (news, idx) for news, idx in missing_articles}
-                for future in as_completed(futures):
-                    news, idx = futures[future]
-                    try:
-                        r = future.result(timeout=15)
-                        if r:
-                            await db.save_analysis_result({
-                                'article_id': news.get('article_id', ''),
-                                'model_used': 'snownlp',
-                                'sentiment_score': r['score'],
-                                'sentiment_label': r['label'],
-                                'keywords': r['keywords'],
-                                'summary': r['summary'],
-                                'analysis_type': 'sentiment',
-                                'result': r['raw'],
-                            })
-                            news_sentiments[idx] = (r['score'], r['label'])
-                            all_keywords.extend(r['keywords'])
-                        else:
-                            news_sentiments[idx] = (0.0, 'neutral')
-                    except Exception:
-                        news_sentiments[idx] = (0.0, 'neutral')
+            tasks = [_analyze_one(news) for news, _ in missing_articles]
+            results = await _asyncio.gather(*tasks, return_exceptions=True)
+            for (news, idx), r in zip(missing_articles, results):
+                if isinstance(r, Exception) or r is None:
+                    news_sentiments[idx] = (0.0, 'neutral')
+                else:
+                    await db.save_analysis_result({
+                        'article_id': news.get('article_id', ''),
+                        'model_used': 'snownlp',
+                        'sentiment_score': r['score'],
+                        'sentiment_label': r['label'],
+                        'keywords': r['keywords'],
+                        'summary': r['summary'],
+                        'analysis_type': 'sentiment',
+                        'result': r['raw'],
+                    })
+                    news_sentiments[idx] = (r['score'], r['label'])
+                    all_keywords.extend(r['keywords'])
 
         # 填充剩余 None
         news_sentiments = [(s[0] if s else 0.0, s[1] if s else 'neutral') for s in news_sentiments]
@@ -280,7 +275,7 @@ async def analyze_news(
                 "source": "经济新闻分析系统"
             }
         }
-        redis_client.set(cache_key, result, ttl=_CACHE_TTL)
+        await redis_client.set(cache_key, result, ttl=_CACHE_TTL)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"新闻分析失败: {e}")
@@ -291,7 +286,7 @@ async def hero_stats():
     """首页 Hero 区轻量数据接口 — 仅返回 DB 聚合数据"""
     try:
         cache_key = f"{_CACHE_PREFIX}hero"
-        cached = redis_client.get(cache_key)
+        cached = await redis_client.get(cache_key)
         if cached is not None:
             return cached
 
@@ -301,7 +296,7 @@ async def hero_stats():
                 "overallScore": 0, "overallLabel": "neutral", "confidence": 0,
                 "positiveCount": 0, "negativeCount": 0, "neutralCount": 0
             }}}
-            redis_client.set(cache_key, result, ttl=_CACHE_TTL * 2)
+            await redis_client.set(cache_key, result, ttl=_CACHE_TTL * 2)
             return result
 
         avg_score, pos_count, neg_count, neu_count = await db.get_sentiment_aggregate()
@@ -327,7 +322,7 @@ async def hero_stats():
                 }
             }
         }
-        redis_client.set(cache_key, result, ttl=_CACHE_TTL * 2)
+        await redis_client.set(cache_key, result, ttl=_CACHE_TTL * 2)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取首页数据失败: {e}")
@@ -340,18 +335,18 @@ async def sentiment_breakdown(
     """P4: 情感细分 — 按来源/分类/实体"""
     try:
         cache_key = f"analysis:breakdown:{time_range}"
-        cached = redis_client.get(cache_key)
+        cached = await redis_client.get(cache_key)
         if cached is not None:
             return cached
 
         from backend.analyzer.text_analyzer import TextAnalyzer
         boundary = _get_time_boundary(time_range)
         news_list = await db.get_news_by_date_range(boundary, '2099-12-31')
-        news_list = [n for n in news_list if n.get('source', '') not in MEDIA_SOURCES]
+        news_list = [n for n in news_list if n.get('source', '') not in EXCLUDED_SOURCES]
 
         analyzer = TextAnalyzer()
         result = {"code": 0, "data": analyzer.sentiment_breakdown(news_list)}
-        redis_client.set(cache_key, result, ttl=_CACHE_TTL)
+        await redis_client.set(cache_key, result, ttl=_CACHE_TTL)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"情感细分失败: {e}")
@@ -375,7 +370,7 @@ async def extract_entities(
             entities = analyzer.extract_entities(news.get('title', '') + ' ' + content)
             return {"code": 0, "data": {"article_id": article_id, "entities": entities}}
 
-        news_list, _ = await db.get_latest_news(limit=limit, exclude_sources=MEDIA_SOURCES)
+        news_list, _ = await db.get_latest_news(limit=limit, exclude_sources=EXCLUDED_SOURCES)
         results = []
         for n in news_list:
             content = n.get('content', '') or n.get('summary', '')
@@ -396,16 +391,16 @@ async def hot_topics(
     """P3: 热点话题检测"""
     try:
         cache_key = f"analysis:hot:{limit}"
-        cached = redis_client.get(cache_key)
+        cached = await redis_client.get(cache_key)
         if cached is not None:
             return cached
 
         from backend.analyzer.text_analyzer import TextAnalyzer
-        news_list, _ = await db.get_latest_news(limit=limit, exclude_sources=MEDIA_SOURCES)
+        news_list, _ = await db.get_latest_news(limit=limit, exclude_sources=EXCLUDED_SOURCES)
 
         topics = TextAnalyzer.detect_hot_topics(news_list, top_k=15)
         result = {"code": 0, "data": topics}
-        redis_client.set(cache_key, result, ttl=_CACHE_TTL)
+        await redis_client.set(cache_key, result, ttl=_CACHE_TTL)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"热点检测失败: {e}")
@@ -418,16 +413,16 @@ async def article_clusters(
     """P5: 文章聚类"""
     try:
         cache_key = f"analysis:clusters:{limit}"
-        cached = redis_client.get(cache_key)
+        cached = await redis_client.get(cache_key)
         if cached is not None:
             return cached
 
         from backend.analyzer.text_analyzer import TextAnalyzer
-        news_list, _ = await db.get_latest_news(limit=limit, exclude_sources=MEDIA_SOURCES)
+        news_list, _ = await db.get_latest_news(limit=limit, exclude_sources=EXCLUDED_SOURCES)
 
         clusters = TextAnalyzer.cluster_articles(news_list, threshold=0.35)
         result = {"code": 0, "data": clusters}
-        redis_client.set(cache_key, result, ttl=_CACHE_TTL * 2)
+        await redis_client.set(cache_key, result, ttl=_CACHE_TTL * 2)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"聚类失败: {e}")
@@ -446,7 +441,7 @@ async def analyze_single_article(article_id: str):
     """分析单条新闻，返回情感、关键词和自动摘要"""
     try:
         cache_key = f"article_analysis:{article_id}"
-        cached = redis_client.get(cache_key)
+        cached = await redis_client.get(cache_key)
         if cached is not None:
             return cached
 
@@ -458,7 +453,7 @@ async def analyze_single_article(article_id: str):
         result = analyzer.analyze_news_article(news)
 
         response = {"code": 0, "data": result}
-        redis_client.set(cache_key, response, ttl=_CACHE_TTL)
+        await redis_client.set(cache_key, response, ttl=_CACHE_TTL)
         return response
     except HTTPException:
         raise

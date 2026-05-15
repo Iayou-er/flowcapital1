@@ -151,8 +151,8 @@ class GraphBuilder:
                 relationships = json.loads(response_text)
                 if isinstance(relationships, list):
                     return relationships[:20]  # 限制关系数量
-            except:
-                pass
+            except (json.JSONDecodeError, TypeError):
+                pass  # JSON解析失败时走规则匹配回退
 
             # 如果可能的JSON解析失败，尝试从文本中抽取关系
             relationships = []
