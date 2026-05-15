@@ -7,21 +7,13 @@ from collections import defaultdict
 import os
 from backend.database.db_manager_async import db_async as db
 from backend.database.redis_client import redis_client
-from backend.analyzer.sentiment import SentimentAnalyzer
 from backend.analyzer.text_analyzer import TextAnalyzer
 from backend.api.routes.news import EXCLUDED_SOURCES
 
 analysis_router = APIRouter(prefix="/analysis", tags=["分析"])
 
 # 懒加载单例
-_sentiment = None
 _text_analyzer = None
-
-def _get_sentiment():
-    global _sentiment
-    if _sentiment is None:
-        _sentiment = SentimentAnalyzer()
-    return _sentiment
 
 def _get_text_analyzer():
     global _text_analyzer
@@ -112,73 +104,20 @@ async def analyze_news(
             await redis_client.set(cache_key, result, ttl=_CACHE_TTL)
             return result
 
-        # ── 步骤1：优先从预计算结果读取，缺失的才并行计算 ──
+        # ── 步骤1：从预计算结果读取，缺失的用中性值（scheduler 会在下一轮补算）──
         article_ids = [n['article_id'] for n in news_list if n.get('article_id')]
         existing_map = await _build_analysis_map(article_ids)
 
         news_sentiments = []
         all_keywords = []
-        missing_articles = []  # [(news_dict, index), ...]
-        for i, news in enumerate(news_list):
+        for news in news_list:
             aid = news.get('article_id', '')
             if aid in existing_map:
                 r = existing_map[aid]
                 news_sentiments.append((r['score'], r['label']))
                 all_keywords.extend(r['keywords'])
             else:
-                news_sentiments.append(None)
-                missing_articles.append((news, i))
-
-        # 仅对缺失的新闻并行计算 sentiment + keywords + summary
-        if missing_articles:
-            import json
-            import asyncio as _asyncio
-            from backend.analyzer.text_analyzer import TextAnalyzer
-            sentiment = _get_sentiment()
-            text_analyzer = TextAnalyzer()
-            _semaphore = _asyncio.Semaphore(4)
-
-            async def _analyze_one(news):
-                async with _semaphore:
-                    content = news.get('content', '') or news.get('summary', '')
-                    text = (news.get('title', '') + ' ' + content[:200])
-                    if not text.strip():
-                        return None
-                    # 合并为一次 to_thread，减少线程池碎片化
-                    def _do_all():
-                        s_result = sentiment.analyze_sentiment(text)
-                        keywords = text_analyzer.extract_keywords(content, 8)
-                        summary = text_analyzer.generate_summary(content, 3)
-                        return {
-                            'score': s_result['sentiment_score'],
-                            'label': s_result['sentiment_label'],
-                            'keywords': keywords,
-                            'summary': summary,
-                            'raw': json.dumps(s_result, ensure_ascii=False),
-                        }
-                    return await _asyncio.to_thread(_do_all)
-
-            tasks = [_analyze_one(news) for news, _ in missing_articles]
-            results = await _asyncio.gather(*tasks, return_exceptions=True)
-            for (news, idx), r in zip(missing_articles, results):
-                if isinstance(r, Exception) or r is None:
-                    news_sentiments[idx] = (0.0, 'neutral')
-                else:
-                    await db.save_analysis_result({
-                        'article_id': news.get('article_id', ''),
-                        'model_used': 'snownlp',
-                        'sentiment_score': r['score'],
-                        'sentiment_label': r['label'],
-                        'keywords': r['keywords'],
-                        'summary': r['summary'],
-                        'analysis_type': 'sentiment',
-                        'result': r['raw'],
-                    })
-                    news_sentiments[idx] = (r['score'], r['label'])
-                    all_keywords.extend(r['keywords'])
-
-        # 填充剩余 None
-        news_sentiments = [(s[0] if s else 0.0, s[1] if s else 'neutral') for s in news_sentiments]
+                news_sentiments.append((0.0, 'neutral'))
 
         # ── 步骤2：分类统计 ──
         category_data = defaultdict(lambda: {"count": 0, "sentiment_sum": 0.0})
