@@ -13,7 +13,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --timeout=120 --retries=5 \
     -r requirements.txt \
     -i https://pypi.tuna.tsinghua.edu.cn/simple
-ENV PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors
+ENV PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright
 RUN playwright install chromium
 
 # 代码
