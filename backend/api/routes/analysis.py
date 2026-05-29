@@ -1,14 +1,19 @@
 """
 分析相关API路由
 """
-from fastapi import APIRouter, HTTPException, Query
+import os
+import asyncio
+import logging
+from fastapi import APIRouter, HTTPException, Query, Depends
+from backend.api.auth import verify_api_key
 from datetime import datetime, timedelta
 from collections import defaultdict
-import os
 from backend.database.db_manager_async import db_async as db
 from backend.database.redis_client import redis_client
 from backend.analyzer.text_analyzer import TextAnalyzer
 from backend.api.routes.news import EXCLUDED_SOURCES
+
+logger = logging.getLogger(__name__)
 
 analysis_router = APIRouter(prefix="/analysis", tags=["分析"])
 
@@ -222,7 +227,8 @@ async def analyze_news(
         await redis_client.set(cache_key, result, ttl=_CACHE_TTL)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"新闻分析失败: {e}")
+        logger.error("新闻分析失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="服务器内部错误")
 
 
 @analysis_router.get("/hero")
@@ -269,7 +275,8 @@ async def hero_stats():
         await redis_client.set(cache_key, result, ttl=_CACHE_TTL * 2)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取首页数据失败: {e}")
+        logger.error("获取首页数据失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="服务器内部错误")
 
 
 @analysis_router.get("/breakdown")
@@ -293,7 +300,8 @@ async def sentiment_breakdown(
         await redis_client.set(cache_key, result, ttl=_CACHE_TTL)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"情感细分失败: {e}")
+        logger.error("情感细分失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="服务器内部错误")
 
 
 @analysis_router.get("/entities")
@@ -303,29 +311,41 @@ async def extract_entities(
 ):
     """P1: 实体识别 — 单篇或批量"""
     try:
-        from backend.analyzer.text_analyzer import TextAnalyzer
-        analyzer = TextAnalyzer()
+        analyzer = _get_text_analyzer()
 
         if article_id:
             news = await db.get_news_by_article_id(article_id)
             if not news:
                 raise HTTPException(status_code=404, detail="新闻未找到")
             content = news.get('content', '') or news.get('summary', '')
-            entities = analyzer.extract_entities(news.get('title', '') + ' ' + content)
+            entities = await asyncio.to_thread(analyzer.extract_entities, news.get('title', '') + ' ' + content)
             return {"code": 0, "data": {"article_id": article_id, "entities": entities}}
 
         news_list, _ = await db.get_latest_news(limit=limit, exclude_sources=EXCLUDED_SOURCES)
-        results = []
+        # 每篇并发提取实体，不阻塞事件循环
+        tasks = []
         for n in news_list:
             content = n.get('content', '') or n.get('summary', '')
-            entities = analyzer.extract_entities((n.get('title', '') + ' ' + content)[:3000])
-            if entities['companies'] or entities['people']:
-                results.append({'article_id': n.get('article_id'), 'title': n.get('title', '')[:50], 'entities': entities})
+            text = (n.get('title', '') + ' ' + content)[:3000]
+            tasks.append(asyncio.to_thread(analyzer.extract_entities, text))
+        entity_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        results = []
+        for n, entities in zip(news_list, entity_results):
+            if isinstance(entities, Exception):
+                continue
+            if entities.get('companies') or entities.get('people'):
+                results.append({
+                    'article_id': n.get('article_id'),
+                    'title': n.get('title', '')[:50],
+                    'entities': entities,
+                })
         return {"code": 0, "data": results}
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"实体识别失败: {e}")
+        logger.error("实体识别失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="实体识别失败")
 
 
 @analysis_router.get("/hot-topics")
@@ -347,7 +367,8 @@ async def hot_topics(
         await redis_client.set(cache_key, result, ttl=_CACHE_TTL)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"热点检测失败: {e}")
+        logger.error("热点检测失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="服务器内部错误")
 
 
 @analysis_router.get("/clusters")
@@ -369,10 +390,11 @@ async def article_clusters(
         await redis_client.set(cache_key, result, ttl=_CACHE_TTL * 2)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"聚类失败: {e}")
+        logger.error("聚类失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="服务器内部错误")
 
 
-@analysis_router.post("/reload-dict")
+@analysis_router.post("/reload-dict", dependencies=[Depends(verify_api_key)])
 async def reload_finance_dict():
     """热更新财经情感词典"""
     from backend.analyzer.finance_sentiment_dict import reload_dict
@@ -402,4 +424,5 @@ async def analyze_single_article(article_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"分析失败: {e}")
+        logger.error("分析失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="服务器内部错误")

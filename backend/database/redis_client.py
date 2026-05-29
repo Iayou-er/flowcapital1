@@ -9,6 +9,7 @@ import json
 import asyncio
 import logging
 import time
+import threading
 from typing import Optional, Any
 
 import redis.asyncio as aioredis
@@ -30,6 +31,7 @@ class RedisClient:
     ):
         self._redis: Optional[aioredis.Redis] = None
         self._mem_cache: dict = {}
+        self._mem_lock = threading.Lock()
         self._host = host or os.environ.get("REDIS_HOST", "localhost")
         self._port = int(port or os.environ.get("REDIS_PORT", 6379))
         self._db = int(db or os.environ.get("REDIS_DB", 0))
@@ -86,14 +88,15 @@ class RedisClient:
                 logger.warning("Redis GET 失败: %s", e)
                 self._redis = None  # 标记断开，下次重连
             return None
-        self._cleanup_expired()
-        entry = self._mem_cache.get(key)
-        if entry:
-            if entry.get("expire", 0) < time.time():
-                del self._mem_cache[key]
-                return None
-            return entry.get("value")
-        return None
+        with self._mem_lock:
+            self._cleanup_expired()
+            entry = self._mem_cache.get(key)
+            if entry:
+                if entry.get("expire", 0) < time.time():
+                    del self._mem_cache[key]
+                    return None
+                return entry.get("value")
+            return None
 
     async def set(self, key: str, value: Any, ttl: int = 300) -> bool:
         self._ensure_connection()
@@ -106,13 +109,14 @@ class RedisClient:
                 logger.warning("Redis SET 失败: %s", e)
                 self._redis = None
                 return False
-        if len(self._mem_cache) >= _MEM_CACHE_MAX_SIZE:
-            self._cleanup_expired()
+        with self._mem_lock:
             if len(self._mem_cache) >= _MEM_CACHE_MAX_SIZE:
-                oldest_key = next(iter(self._mem_cache))
-                del self._mem_cache[oldest_key]
-        self._mem_cache[key] = {"value": value, "expire": time.time() + ttl}
-        return True
+                self._cleanup_expired()
+                if len(self._mem_cache) >= _MEM_CACHE_MAX_SIZE:
+                    oldest_key = next(iter(self._mem_cache))
+                    del self._mem_cache[oldest_key]
+            self._mem_cache[key] = {"value": value, "expire": time.time() + ttl}
+            return True
 
     async def delete(self, key: str) -> bool:
         self._ensure_connection()
@@ -124,8 +128,9 @@ class RedisClient:
                 logger.warning("Redis DELETE 失败: %s", e)
                 self._redis = None
                 return False
-        self._mem_cache.pop(key, None)
-        return True
+        with self._mem_lock:
+            self._mem_cache.pop(key, None)
+            return True
 
     async def delete_pattern(self, pattern: str) -> int:
         """删除匹配 pattern 的所有键"""
@@ -144,12 +149,13 @@ class RedisClient:
             except Exception as e:
                 logger.warning("Redis DELETE pattern 失败: %s", e)
                 self._redis = None
-        prefix = pattern.rstrip("*")
-        to_delete = [k for k in self._mem_cache if k.startswith(prefix)]
-        for k in to_delete:
-            del self._mem_cache[k]
-        count += len(to_delete)
-        return count
+        with self._mem_lock:
+            prefix = pattern.rstrip("*")
+            to_delete = [k for k in self._mem_cache if k.startswith(prefix)]
+            for k in to_delete:
+                del self._mem_cache[k]
+            count += len(to_delete)
+            return count
 
     async def is_available(self) -> bool:
         return self._redis is not None
@@ -164,33 +170,43 @@ class RedisClient:
                 logger.warning("Redis FLUSHDB 失败: %s", e)
                 self._redis = None
                 return False
-        self._mem_cache.clear()
-        return True
+        with self._mem_lock:
+            self._mem_cache.clear()
+            return True
 
     # ── 同步兼容方法（仅内存缓存，仅供遗留同步代码使用） ──
 
     def get_sync(self, key: str) -> Any:
-        self._cleanup_expired()
-        entry = self._mem_cache.get(key)
-        if entry:
-            if entry.get("expire", 0) < time.time():
-                del self._mem_cache[key]
-                return None
-            return entry.get("value")
-        return None
+        with self._mem_lock:
+            self._cleanup_expired()
+            entry = self._mem_cache.get(key)
+            if entry:
+                if entry.get("expire", 0) < time.time():
+                    del self._mem_cache[key]
+                    return None
+                return entry.get("value")
+            return None
 
     def set_sync(self, key: str, value: Any, ttl: int = 300) -> bool:
-        if len(self._mem_cache) >= _MEM_CACHE_MAX_SIZE:
-            self._cleanup_expired()
+        with self._mem_lock:
             if len(self._mem_cache) >= _MEM_CACHE_MAX_SIZE:
-                oldest_key = next(iter(self._mem_cache))
-                del self._mem_cache[oldest_key]
-        self._mem_cache[key] = {"value": value, "expire": time.time() + ttl}
-        return True
+                self._cleanup_expired()
+                if len(self._mem_cache) >= _MEM_CACHE_MAX_SIZE:
+                    oldest_key = next(iter(self._mem_cache))
+                    del self._mem_cache[oldest_key]
+            self._mem_cache[key] = {"value": value, "expire": time.time() + ttl}
+            return True
 
     def delete_sync(self, key: str) -> bool:
-        self._mem_cache.pop(key, None)
-        return True
+        with self._mem_lock:
+            if "*" in key:
+                prefix = key.split("*")[0]
+                to_del = [k for k in self._mem_cache if k.startswith(prefix)]
+                for k in to_del:
+                    del self._mem_cache[k]
+            else:
+                self._mem_cache.pop(key, None)
+            return True
 
 
 redis_client = RedisClient()

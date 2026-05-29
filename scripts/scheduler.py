@@ -344,9 +344,10 @@ async def crawl_and_analyze_news():
             logger.warning(f"索引优化失败: {e}")
 
         # 6. WAL checkpoint 清理（防止 WAL 文件无限增长，仅 SQLite）
+        # 使用 PASSIVE 模式：不阻塞其他连接，适合多 worker 并发场景
         try:
             if not _IS_PG:
-                await db.execute_write('PRAGMA wal_checkpoint(TRUNCATE)')
+                await db.execute_write('PRAGMA wal_checkpoint(PASSIVE)')
                 logger.info("WAL checkpoint 完成")
         except Exception as e:
             logger.warning(f"WAL checkpoint 失败: {e}")
@@ -530,11 +531,11 @@ async def full_analysis():
         except Exception as e:
             logger.warning(f"热度分计算失败: {e}")
 
-        # 9. WAL checkpoint 清理（仅 SQLite）
+        # 9. WAL checkpoint 清理（仅 SQLite，凌晨流量低，可用 TRUNCATE 彻底清理）
         try:
             if not _IS_PG:
                 await db.execute_write('PRAGMA wal_checkpoint(TRUNCATE)')
-                logger.info("WAL checkpoint 完成")
+                logger.info("WAL checkpoint(TRUNCATE) 完成")
         except Exception as e:
             logger.warning(f"WAL checkpoint 失败: {e}")
 

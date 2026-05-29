@@ -75,10 +75,26 @@ CORS_ORIGINS = os.environ.get(
 )
 cors_origins_list = [o.strip() for o in CORS_ORIGINS.split(",") if o.strip()]
 
+logger = logging.getLogger(__name__)
+
 # 生产环境禁用通配符（开发环境允许）
 IS_PRODUCTION = os.environ.get("ENVIRONMENT", "development").lower() == "production"
-if IS_PRODUCTION and cors_origins_list == ["*"]:
-    cors_origins_list = ["http://localhost:3000"]
+ENABLE_AUTH = os.environ.get("ENABLE_AUTH", "true").lower() == "true"
+API_KEY_VAL = os.environ.get("API_KEY", "")
+
+if IS_PRODUCTION:
+    if cors_origins_list == ["*"]:
+        cors_origins_list = ["http://localhost:3000"]
+    # 认证安全检查
+    if not ENABLE_AUTH:
+        logger.critical("⚠️ 生产环境 ENABLE_AUTH=false，所有写接口无认证！")
+    if not API_KEY_VAL or API_KEY_VAL == "your-api-key-here":
+        logger.critical("⚠️ 生产环境 API_KEY 未配置或为占位符！")
+    # CORS 来源校验（本地开发地址例外）
+    for origin in cors_origins_list:
+        is_localhost = "localhost" in origin or "127.0.0.1" in origin
+        if not is_localhost and not origin.startswith("https://"):
+            logger.critical("⚠️ 生产环境非本地 CORS 来源必须使用 HTTPS: %s", origin)
 
 app.add_middleware(
     CORSMiddleware,
@@ -116,20 +132,30 @@ async def access_log_middleware(request: Request, call_next):
     import time as _time
     t0 = _time.time()
     response = await call_next(request)
-    duration = (_time.time() - t0) * 1000
-    logging.getLogger('api.access').info(
-        '%s %s %s %s %.0fms',
-        request.client.host if request.client else "-",
-        request.method, request.url.path,
-        response.status_code, duration
-    )
+    try:
+        duration = (_time.time() - t0) * 1000
+        logging.getLogger('api.access').info(
+            '%s %s %s %s %.0fms',
+            request.client.host if request.client else "-",
+            request.method, request.url.path,
+            response.status_code, duration
+        )
+    except Exception:
+        pass  # 日志失败不影响请求
     return response
 
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
-    """HTTP 频率限制中间件 — 基于客户端 IP"""
-    client_ip = request.client.host if request.client else "unknown"
+    """HTTP 频率限制中间件 — 基于客户端真实 IP（支持反向代理）"""
+    # 优先从 Nginx 注入的 X-Real-IP 获取真实客户端 IP
+    client_ip = request.headers.get("X-Real-IP")
+    if not client_ip:
+        xff = request.headers.get("X-Forwarded-For")
+        if xff:
+            client_ip = xff.split(",")[0].strip()
+    if not client_ip:
+        client_ip = request.client.host if request.client else "unknown"
     path = request.url.path
 
     # 查找匹配的频率限制配置（精确匹配优先）
@@ -227,8 +253,6 @@ async def admin_status():
 
 app.include_router(admin_router)
 
-logger = logging.getLogger(__name__)
-
 
 @app.exception_handler(StarletteHTTPException)
 async def custom_http_exception_handler(request, exc):
@@ -300,43 +324,54 @@ async def global_exception_handler(request, exc):
 
 @app.get("/api/health")
 async def health_check():
-    """健康检查接口"""
-    # 检查 SQLite
-    db_ok = False
-    try:
-        row = await db.query_one("SELECT 1")
-        db_ok = row is not None
-    except Exception:
-        logging.getLogger(__name__).warning("健康检查: 数据库连接失败", exc_info=True)
+    """健康检查接口（并发执行所有检查）"""
+    health_logger = logging.getLogger(__name__)
 
-    # 检查 Whoosh
-    whoosh_ok = False
-    try:
-        from backend.analyzer.search_engine import _get_index
-        idx = _get_index()
-        whoosh_ok = idx is not None
-    except Exception:
-        logging.getLogger(__name__).warning("健康检查: Whoosh 索引不可用", exc_info=True)
+    async def _check_db():
+        try:
+            row = await db.query_one("SELECT 1")
+            return row is not None
+        except Exception:
+            health_logger.warning("健康检查: 数据库连接失败", exc_info=True)
+            return False
 
-    # 数据库统计
-    news_count = 0
-    try:
-        row = await db.query_one("SELECT COUNT(*) FROM news_articles")
-        news_count = row[0] if row else 0
-    except Exception:
-        logging.getLogger(__name__).warning("健康检查: 统计查询失败", exc_info=True)
+    async def _check_db_count():
+        try:
+            row = await db.query_one("SELECT COUNT(*) FROM news_articles")
+            return row[0] if row else 0
+        except Exception:
+            return 0
 
-    return {
-        "status": "ok" if (db_ok and whoosh_ok) else "degraded",
+    async def _check_whoosh():
+        try:
+            from backend.analyzer.search_engine import _get_index
+            idx = _get_index()
+            return idx is not None
+        except Exception:
+            health_logger.warning("健康检查: Whoosh 索引不可用", exc_info=True)
+            return False
+
+    async def _check_redis():
+        try:
+            return await redis_client.is_available()
+        except Exception:
+            return False
+
+    db_ok, news_count, whoosh_ok, redis_ok = await asyncio.gather(
+        _check_db(), _check_db_count(), _check_whoosh(), _check_redis()
+    )
+
+    is_healthy = db_ok and whoosh_ok
+    content = {
+        "status": "ok" if is_healthy else "degraded",
         "service": "经济新闻分析系统",
         "version": "1.0.0",
         "uptime_seconds": int(time.time() - _start_time),
-        "metrics": {
-            "news_count": news_count,
-        },
+        "metrics": {"news_count": news_count},
         "checks": {
             "sqlite": "connected" if db_ok else "disconnected",
-            "redis": "connected" if await redis_client.is_available() else "not_configured",
+            "redis": "connected" if redis_ok else "not_configured",
             "whoosh": "ready" if whoosh_ok else "not_ready",
         }
     }
+    return JSONResponse(status_code=200 if is_healthy else 503, content=content)

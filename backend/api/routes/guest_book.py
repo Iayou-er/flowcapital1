@@ -159,4 +159,5 @@ async def get_messages(
         messages, total = await db.get_guest_messages(page=page, limit=limit)
         return {"code": 0, "data": messages, "count": len(messages), "total": total, "page": page}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取留言失败: {e}")
+        logger.error("获取留言失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="服务器内部错误")

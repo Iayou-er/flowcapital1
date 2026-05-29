@@ -57,7 +57,8 @@ async def get_latest_news(
         await redis_client.set(cache_key, result, ttl=_CACHE_TTL)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取新闻失败: {e}")
+        logger.error("获取新闻失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="服务器内部错误")
 
 
 # 自媒体/公众号来源
@@ -108,7 +109,8 @@ async def get_media_news(
         await redis_client.set(cache_key, result, ttl=_CACHE_TTL)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取自媒体内容失败: {e}")
+        logger.error("获取自媒体内容失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="服务器内部错误")
 
 
 @news_router.get("/media/search")
@@ -128,7 +130,8 @@ async def search_media(
 
         return {"code": 0, "data": results, "count": len(results), "total": total, "page": page}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"搜索自媒体内容失败: {e}")
+        logger.error("搜索自媒体内容失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="服务器内部错误")
 
 
 @news_router.get("/search")
@@ -189,7 +192,8 @@ async def get_categories():
         categories = await db.get_all_categories()
         return {"code": 0, "data": categories}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取分类失败: {e}")
+        logger.error("获取分类失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="服务器内部错误")
 
 
 @news_router.get("/category/{category}")
@@ -210,7 +214,8 @@ async def get_news_by_category(
         await redis_client.set(cache_key, result, ttl=_CACHE_TTL)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取分类新闻失败: {e}")
+        logger.error("获取分类新闻失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="服务器内部错误")
 
 
 @news_router.get("/{article_id}")
@@ -224,7 +229,8 @@ async def get_news_by_id(article_id: str = Path(..., max_length=200)):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取新闻详情失败: {e}")
+        logger.error("获取新闻详情失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="服务器内部错误")
 
 
 @news_router.post("/{article_id}/translate", dependencies=[Depends(verify_api_key)])
@@ -272,7 +278,8 @@ async def translate_news(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"翻译失败: {e}")
+        logger.error("翻译失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="翻译失败，请稍后重试")
 
 
 @news_router.post("/translate", dependencies=[Depends(verify_api_key)])
@@ -286,7 +293,8 @@ async def translate_text(request: TranslateTextRequest):
         )
         return {"code": 0, "data": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"翻译失败: {e}")
+        logger.error("翻译失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="翻译失败，请稍后重试")
 
 
 @news_router.get("/languages")
@@ -335,7 +343,8 @@ async def find_duplicate_news(
             }
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"去重检测失败: {e}")
+        logger.error("去重检测失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="服务器内部错误")
 
 
 @news_router.post("/rebuild-index", dependencies=[Depends(verify_api_key)])
@@ -353,4 +362,5 @@ async def rebuild_search_index(
         count = await asyncio.to_thread(rebuild_index, news_list)
         return {"code": 0, "data": {"message": f"索引完成，共索引 {count} 条新闻"}}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"重建索引失败: {e}")
+        logger.error("重建索引失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="服务器内部错误")

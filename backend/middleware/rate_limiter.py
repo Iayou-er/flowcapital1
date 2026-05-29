@@ -79,11 +79,13 @@ RATE_LIMIT_CONFIG = {
     "/api/guest/message": (5, 60),        # 留言提交: 5次/分钟, 防刷
     "/api/guest/login": (10, 60),         # 登录: 10次/分钟
     "/api/guest/assign-id": (20, 60),     # 分配ID: 20次/分钟
-    "/api/news/latest": (60, 60),         # 最新新闻: 60次/分钟
-    "/api/news/search": (30, 60),         # 搜索: 30次/分钟
-    "/api/analysis": (30, 60),            # 分析: 30次/分钟
-    "/api/graph-rag/query": (20, 60),     # GraphRAG: 20次/分钟
-    "/api/graph-rag/entity-timeline": (20, 60),  # 实体时间线: 20次/分钟
+    "/api/news/latest": (120, 60),        # 最新新闻: 120次/分钟（首页高频调用）
+    "/api/news/fresh": (120, 60),         # 轮询: 120次/分钟
+    "/api/news/search": (60, 60),         # 搜索: 60次/分钟
+    "/api/analysis": (60, 60),            # 分析: 60次/分钟
+    "/api/analysis/hero": (120, 60),      # Hero 统计: 120次/分钟
+    "/api/graph-rag/query": (30, 60),     # GraphRAG: 30次/分钟
+    "/api/graph-rag/entity-timeline": (30, 60),  # 实体时间线: 30次/分钟
     "/api/health": (120, 60),             # 健康检查: 120次/分钟
 }
 # 默认限制（未配置的端点）

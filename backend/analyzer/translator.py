@@ -80,26 +80,37 @@ class Translator:
         if from_lang == to_lang:
             return text
 
-        try:
-            if self._available:
-                if self._api_type == 'tencent':
-                    result = self._translate_tencent(text, from_lang, to_lang)
+        result = None
+        for attempt in range(2):
+            try:
+                if self._available:
+                    if self._api_type == 'tencent':
+                        result = self._translate_tencent(text, from_lang, to_lang)
+                    else:
+                        result = self._translate_baidu(text, from_lang, to_lang)
                 else:
-                    result = self._translate_baidu(text, from_lang, to_lang)
-            else:
+                    result = self._translate_fallback(text, from_lang, to_lang)
+                break
+            except (requests.Timeout, requests.ConnectionError) as e:
+                if attempt == 0:
+                    logger.warning("翻译超时，重试: %s", e)
+                    time.sleep(1)
+                    continue
+                logger.warning("翻译失败: %s", e)
                 result = self._translate_fallback(text, from_lang, to_lang)
+            except Exception as e:
+                logger.warning("翻译失败: %s", e)
+                result = self._translate_fallback(text, from_lang, to_lang)
+                break
 
-            if result:
-                if cache_key not in self._cache and len(self._cache) >= self._cache_max:
-                    oldest = self._cache_order.pop(0)
-                    self._cache.pop(oldest, None)
-                self._cache[cache_key] = result
-                if cache_key not in self._cache_order:
-                    self._cache_order.append(cache_key)
-            return result
-        except Exception as e:
-            logger.warning(f"翻译失败: {e}")
-            return self._translate_fallback(text, from_lang, to_lang)
+        if result:
+            if cache_key not in self._cache and len(self._cache) >= self._cache_max:
+                oldest = self._cache_order.pop(0)
+                self._cache.pop(oldest, None)
+            self._cache[cache_key] = result
+            if cache_key not in self._cache_order:
+                self._cache_order.append(cache_key)
+        return result
 
     def translate_batch(self, texts: List[str], from_lang: str = 'auto', to_lang: str = 'en') -> List[str]:
         """批量翻译"""
@@ -167,6 +178,8 @@ class Translator:
         有限额，仅用于开发测试
         """
         try:
+            if len(text) > 500:
+                logger.warning("翻译文本截断: %d → 500 字符", len(text))
             resp = requests.get(
                 'https://api.mymemory.translated.net/get',
                 params={

@@ -54,7 +54,9 @@ class AsyncDatabaseManager:
             if not _IS_PG:
                 await conn.execute(text("PRAGMA journal_mode=WAL"))
                 await conn.execute(text("PRAGMA synchronous=NORMAL"))
-                await conn.execute(text("PRAGMA busy_timeout=10000"))
+                await conn.execute(text("PRAGMA busy_timeout=5000"))   # 5s，配合 retry_on_lock 共 5 次
+                await conn.execute(text("PRAGMA wal_autocheckpoint=1000"))  # 减少 checkpoint 频率
+                await conn.execute(text("PRAGMA cache_size=-64000"))  # 64MB 页缓存
             await conn.run_sync(Base.metadata.create_all)
         logger.info("ORM 表初始化完成（WAL: %s）", "disabled" if _IS_PG else "enabled")
 
@@ -171,6 +173,7 @@ class AsyncDatabaseManager:
 
     # ── raw SQL access ──
 
+    # busy_timeout=5s × 3 次重试 = 最坏 ~15s，匹配前端 30s timeout
     @retry_on_lock(max_retries=3, delay=0.1)
     async def execute_write(self, sql: str, params: dict = None):
         async with AsyncSessionLocal() as session:
@@ -178,10 +181,12 @@ class AsyncDatabaseManager:
             await session.commit()
             return result
 
+    @retry_on_lock(max_retries=3, delay=0.1)
     async def query_one(self, sql: str, params: dict = None):
         async with AsyncSessionLocal() as session:
             return (await session.execute(text(sql), params or {})).fetchone()
 
+    @retry_on_lock(max_retries=3, delay=0.1)
     async def query_all(self, sql: str, params: dict = None):
         async with AsyncSessionLocal() as session:
             return (await session.execute(text(sql), params or {})).fetchall()

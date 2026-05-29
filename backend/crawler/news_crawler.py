@@ -500,7 +500,7 @@ class NewsCrawler:
             allowed_methods=['GET', 'HEAD'],
             raise_on_status=False,
         )
-        adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=8, pool_maxsize=8)
+        adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=16, pool_maxsize=16)
         self.session.mount('https://', adapter)
         self.session.mount('http://', adapter)
 

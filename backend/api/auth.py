@@ -25,6 +25,7 @@ PROTECTED_PATHS = [
     "/api/graph-rag/query-test",
     "/api/news/rebuild-index",
     "/api/news/translate",
+    "/api/analysis/reload-dict",
     "/api/guest/message",
     "/api/admin",
     "/metrics",
@@ -57,6 +58,14 @@ async def verify_csrf(request: Request):
         return
 
     origin = request.headers.get("origin") or request.headers.get("referer", "")
+    path = request.url.path
+
+    # 生产环境：浏览器专用端点必须携带 Origin
+    _BROWSER_ONLY = {"/api/guest/login", "/api/guest/message"}
+    is_production = os.environ.get("ENVIRONMENT", "development").lower() == "production"
+    if is_production and path in _BROWSER_ONLY and not origin:
+        raise HTTPException(status_code=403, detail="缺少 Origin 头")
+
     if not origin:
         return  # 非浏览器客户端（curl 等）放行
 

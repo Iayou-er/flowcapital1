@@ -53,20 +53,44 @@ class CloudLLMClient:
             'Accept': 'application/json'
         })
 
+    _RETRYABLE_STATUS = {429, 500, 502, 503}
+
     def generate_response(self, prompt: str, system: str = None, **kwargs) -> str:
-        """生成响应（返回纯文本）"""
-        try:
-            if self.api_type == "aliyun":
-                return self._aliyun_generate(prompt, system, **kwargs)
-            elif self.api_type == "baidu":
-                return self._baidu_generate(prompt, system, **kwargs)
-            elif self.api_type == "openai":
-                return self._openai_generate(prompt, system, **kwargs)
-            else:
-                raise ValueError(f"Unsupported API type: {self.api_type}")
-        except Exception as e:
-            logger.error(f"LLM API call failed: {e}")
-            raise
+        """生成响应（返回纯文本），自动重试 transient 错误"""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                if self.api_type == "aliyun":
+                    return self._aliyun_generate(prompt, system, **kwargs)
+                elif self.api_type == "baidu":
+                    return self._baidu_generate(prompt, system, **kwargs)
+                elif self.api_type == "openai":
+                    return self._openai_generate(prompt, system, **kwargs)
+                else:
+                    raise ValueError(f"Unsupported API type: {self.api_type}")
+            except requests.Timeout:
+                if attempt < max_retries - 1:
+                    logger.warning("LLM 超时，重试 %d/%d", attempt + 1, max_retries)
+                    time.sleep(2 ** attempt)
+                    continue
+                raise
+            except requests.HTTPError as e:
+                status = e.response.status_code if e.response is not None else 0
+                if status in self._RETRYABLE_STATUS and attempt < max_retries - 1:
+                    logger.warning("LLM HTTP %d，重试 %d/%d", status, attempt + 1, max_retries)
+                    time.sleep(2 ** attempt)
+                    continue
+                logger.error("LLM API call failed: %s", e)
+                raise
+            except requests.ConnectionError:
+                if attempt < max_retries - 1:
+                    logger.warning("LLM 连接失败，重试 %d/%d", attempt + 1, max_retries)
+                    time.sleep(2 ** attempt)
+                    continue
+                raise
+            except Exception as e:
+                logger.error("LLM API call failed: %s", e)
+                raise
 
     def generate_structured(self, prompt: str, system: str = None, **kwargs) -> dict:
         """生成 OpenAI 兼容格式的响应（供 graph_builder/rag_engine 使用）"""
@@ -98,7 +122,7 @@ class CloudLLMClient:
             self.endpoint,
             headers=headers,
             json=data,
-            timeout=kwargs.get('timeout', 30)
+            timeout=kwargs.get('timeout', (5, 60))
         )
         response.raise_for_status()
         result = response.json()
@@ -122,7 +146,7 @@ class CloudLLMClient:
             'temperature': kwargs.get('temperature', 0.3),
         }
 
-        response = self.session.post(url, json=data, timeout=kwargs.get('timeout', 30))
+        response = self.session.post(url, json=data, timeout=kwargs.get('timeout', (5, 60)))
         response.raise_for_status()
         result = response.json()
         return result.get('result', '')
@@ -172,7 +196,7 @@ class CloudLLMClient:
             self.endpoint,
             headers=headers,
             json=data,
-            timeout=kwargs.get('timeout', 30)
+            timeout=kwargs.get('timeout', (5, 60))
         )
         response.raise_for_status()
         result = response.json()

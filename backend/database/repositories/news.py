@@ -84,47 +84,47 @@ class NewsRepository(AsyncRepository):
         if not articles:
             return 0
         try:
+            # 1. 去重检查（单次查询）
             async with AsyncSessionLocal() as session:
                 article_ids = [a["article_id"] for a in articles]
                 in_sql, in_params = build_in_clause("ids", article_ids)
-
                 existing_rows = (
                     await session.execute(
-                        text(
-                            f"SELECT article_id, content, title, summary FROM news_articles "
-                            f"WHERE article_id {in_sql}"
-                        ),
+                        text(f"SELECT article_id, content, title, summary FROM news_articles WHERE article_id {in_sql}"),
                         in_params,
                     )
                 ).fetchall()
                 existing_map = {r[0]: r for r in existing_rows}
 
-                to_insert = []
-                skip_count = 0
-                for article in articles:
-                    existing = existing_map.get(article["article_id"])
-                    if (
-                        existing
-                        and existing[1] == article.get("content", "")
+            to_insert = []
+            skip_count = 0
+            for article in articles:
+                existing = existing_map.get(article["article_id"])
+                if (existing and existing[1] == article.get("content", "")
                         and existing[2] == article.get("title", "")
-                        and existing[3] == article.get("summary", "")
-                    ):
-                        skip_count += 1
-                        continue
-                    to_insert.append(article)
+                        and existing[3] == article.get("summary", "")):
+                    skip_count += 1
+                    continue
+                to_insert.append(article)
 
-                if not to_insert:
-                    logger.debug("批量保存: 全部 %d 篇已存在且内容一致，跳过", skip_count)
-                    return skip_count
+            if not to_insert:
+                logger.debug("批量保存: 全部 %d 篇已存在且内容一致，跳过", skip_count)
+                return skip_count
 
-                now = datetime.now().isoformat()
-                col_names = (
-                    "article_id, title, content, summary, url, source, category, "
-                    "published_at, author, read_count, comment_count, tags, created_at, updated_at"
-                )
+            # 2. 分块写入（每块独立 session，避免单条失败回滚全部 + 防超 SQLite 变量上限）
+            CHUNK_SIZE = 50
+            now = datetime.now().isoformat()
+            col_names = (
+                "article_id, title, content, summary, url, source, category, "
+                "published_at, author, read_count, comment_count, tags, created_at, updated_at"
+            )
+            total_saved = 0
+
+            for chunk_start in range(0, len(to_insert), CHUNK_SIZE):
+                chunk = to_insert[chunk_start:chunk_start + CHUNK_SIZE]
                 values_parts = []
                 all_params = {}
-                for i, article in enumerate(to_insert):
+                for i, article in enumerate(chunk):
                     p = f"a{i}_"
                     tags = article.get("tags", [])
                     tags_str = ",".join(tags) if isinstance(tags, list) else (tags or "")
@@ -151,7 +151,6 @@ class NewsRepository(AsyncRepository):
                     })
 
                 values_sql = ", ".join(values_parts)
-
                 sql = (
                     f"INSERT INTO news_articles ({col_names}) VALUES {values_sql} "
                     "ON CONFLICT (article_id) DO UPDATE SET "
@@ -161,13 +160,16 @@ class NewsRepository(AsyncRepository):
                     "read_count = EXCLUDED.read_count, comment_count = EXCLUDED.comment_count, "
                     "tags = EXCLUDED.tags, created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at"
                 )
+                try:
+                    async with AsyncSessionLocal() as session:
+                        await session.execute(text(sql), all_params)
+                        await session.commit()
+                        total_saved += len(chunk)
+                except Exception as e:
+                    logger.warning("批次 %d-%d 保存失败: %s", chunk_start, chunk_start + len(chunk), e)
 
-                await session.execute(text(sql), all_params)
-                await session.commit()
-
-                success = len(to_insert)
-                logger.info("批量保存完成: 写入=%d, 跳过=%d/%d", success, skip_count, len(articles))
-                return success
+            logger.info("批量保存完成: 写入=%d, 跳过=%d/%d", total_saved, skip_count, len(articles))
+            return total_saved
         except Exception as e:
             logger.error("批量保存失败: %s", e)
             return 0
@@ -177,12 +179,20 @@ class NewsRepository(AsyncRepository):
         if not scores:
             return
         try:
+            # CASE 批量更新，避免 N+1
+            cases = []
+            params = {}
+            for i, (aid, score) in enumerate(scores.items()):
+                cases.append(f"WHEN :aid{i} THEN :score{i}")
+                params[f"aid{i}"] = aid
+                params[f"score{i}"] = round(score, 4)
+            aids_list = ", ".join(f":aid{i}" for i in range(len(scores)))
+            sql = (
+                f"UPDATE news_articles SET hotness_score = CASE article_id "
+                f"{' '.join(cases)} END WHERE article_id IN ({aids_list})"
+            )
             async with AsyncSessionLocal() as session:
-                for aid, score in scores.items():
-                    await session.execute(
-                        text("UPDATE news_articles SET hotness_score = :score WHERE article_id = :aid"),
-                        {"score": round(score, 4), "aid": aid},
-                    )
+                await session.execute(text(sql), params)
                 await session.commit()
         except Exception as e:
             logger.error("更新热度分失败: %s", e)

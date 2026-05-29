@@ -6,6 +6,7 @@
 
 import logging
 import json
+from collections import OrderedDict
 from typing import List, Dict
 
 logger = logging.getLogger(__name__)
@@ -27,20 +28,20 @@ class SentimentAnalyzer:
     优先级：SnowNLP > 词典分析
     """
 
-    # SnowNLP 单例，避免重复加载模型
-    _snownlp_cache = {}
+    # SnowNLP LRU 缓存，避免重复加载模型
+    _snownlp_cache = OrderedDict()
+    _SNOWNLP_CACHE_MAX = 500
 
     def _get_snownlp(self, text: str) -> 'SnowNLP':
-        """获取或创建 SnowNLP 实例"""
+        """获取或创建 SnowNLP 实例（LRU）"""
         import hashlib
         key = hashlib.md5(text.encode('utf-8', errors='replace')).hexdigest()
-        if key not in self._snownlp_cache:
-            self._snownlp_cache[key] = SnowNLP(text)
-            if len(self._snownlp_cache) > 1000:
-                # LRU: 删除最早的一半
-                oldest = list(self._snownlp_cache.keys())[:500]
-                for k in oldest:
-                    del self._snownlp_cache[k]
+        if key in self._snownlp_cache:
+            self._snownlp_cache.move_to_end(key)
+            return self._snownlp_cache[key]
+        self._snownlp_cache[key] = SnowNLP(text)
+        if len(self._snownlp_cache) > self._SNOWNLP_CACHE_MAX:
+            self._snownlp_cache.popitem(last=False)  # 淘汰最久未用
         return self._snownlp_cache[key]
 
     def analyze_sentiment(self, text: str) -> Dict:
